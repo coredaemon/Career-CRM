@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui";
+import { validateCoverLetterText, type CoverLetterWarning, type ValidationContext } from "@/lib/cover-letter-validator";
 
 const styleOptions: { label: string; instruction: string }[] = [
   { label: "Спокойное (базовое)", instruction: "спокойный деловой стиль, без пафоса" },
@@ -16,12 +17,14 @@ export function CoverLetterTools({
   vacancyId,
   resumeId,
   currentText,
-  disabled
+  disabled,
+  validationContext
 }: {
   vacancyId: string;
   resumeId?: string;
   currentText?: string;
   disabled?: boolean;
+  validationContext?: ValidationContext;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState("");
@@ -29,6 +32,10 @@ export function CoverLetterTools({
   const [editText, setEditText] = useState(currentText ?? "");
   const [editDirty, setEditDirty] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
+  const warnings = useMemo<CoverLetterWarning[]>(
+    () => (editText ? validateCoverLetterText(editText, validationContext) : []),
+    [editText, validationContext]
+  );
 
   async function regenerate(instruction: string) {
     if (!resumeId) {
@@ -117,6 +124,22 @@ export function CoverLetterTools({
               </button>
             ) : null}
           </div>
+        </div>
+      ) : null}
+
+      {warnings.length > 0 ? (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 dark:bg-amber-950/30">
+          <div className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-200">
+            Письмо может содержать нерелевантные или нежелательные фрагменты:
+          </div>
+          <ul className="grid gap-1.5">
+            {warnings.map((w) => (
+              <li key={w.code} className="flex items-start gap-2 text-sm text-amber-800 dark:text-amber-200">
+                <span className="mt-0.5 flex-none">{w.level === "critical" ? "⚠" : "•"}</span>
+                <span>{w.message}</span>
+              </li>
+            ))}
+          </ul>
         </div>
       ) : null}
 

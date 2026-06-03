@@ -183,7 +183,17 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
               <>
                 <p className="mt-1 text-sm text-[var(--muted)]">Версия: {latestLetter.style} · резюме: {latestLetter.resume.title}</p>
                 <div className="mt-4">
-                  <CoverLetterTools vacancyId={vacancy.id} resumeId={latestLetter.resumeId} currentText={latestLetter.text} />
+                  <CoverLetterTools
+                    vacancyId={vacancy.id}
+                    resumeId={latestLetter.resumeId}
+                    currentText={latestLetter.text}
+                    validationContext={{
+                      vacancyTitle: vacancy.title,
+                      vacancyKeyTasks: analysis.recommended_cover_letter_focus ?? [],
+                      matchedRequirements: analysis.resume_match_basis?.matched_requirements ?? [],
+                      salaryExpectationsRequested: analysis.salary_expectations_requested ?? false
+                    }}
+                  />
                 </div>
               </>
             ) : showCreateLetter ? (

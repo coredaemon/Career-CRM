@@ -388,15 +388,45 @@ export async function generateCoverLetterWithAi(params: {
     .filter(Boolean)
     .join("\n\n");
 
+  const matchedRequirements = params.analysis.resume_match_basis?.matched_requirements ?? [];
+  const jobPriorities = params.analysis.cover_letter_brief.job_priorities;
+  const coverLetterFocus = params.analysis.recommended_cover_letter_focus;
+
+  // Filter candidate_strengths: keep only facts that are directly linked to what
+  // the vacancy actually requires (job_priorities or recommended_cover_letter_focus).
+  // Facts that do not appear in matched_requirements are excluded to avoid inserting
+  // generic achievements that are irrelevant to the specific vacancy.
+  const allStrengths = params.analysis.cover_letter_brief.candidate_strengths;
+  const relevantCandidateFacts = allStrengths.filter((strength) => {
+    const strengthWords = strength.toLowerCase().split(/\s+/).filter((w) => w.length > 4);
+    // Keep if the strength meaningfully overlaps with any matched requirement.
+    // Uses 5-char prefix matching to handle Russian inflection
+    // (e.g. "договорную" and "договорной" share prefix "догов").
+    return matchedRequirements.some((req) => {
+      const reqWords = req.toLowerCase().split(/\s+/).filter((w) => w.length > 4);
+      return strengthWords.some((sw) =>
+        reqWords.some(
+          (rw) =>
+            rw.startsWith(sw.slice(0, 5)) || sw.startsWith(rw.slice(0, 5))
+        )
+      );
+    });
+  });
+
+  // Facts not included in relevantCandidateFacts go to excludedFacts so the writer
+  // explicitly knows not to mention them.
+  const excludedFacts = allStrengths.filter((s) => !relevantCandidateFacts.includes(s));
+
   const brief = {
     vacancy_title: params.vacancy.title,
-    candidate_strengths: params.analysis.cover_letter_brief.candidate_strengths,
-    job_priorities: params.analysis.cover_letter_brief.job_priorities,
-    matched_requirements: params.analysis.resume_match_basis?.matched_requirements ?? [],
+    relevant_candidate_facts: relevantCandidateFacts,
+    job_priorities: jobPriorities,
+    matched_requirements: matchedRequirements,
     red_flags: params.analysis.red_flags,
     avoid_claims: params.analysis.avoid_claims,
+    excluded_facts: excludedFacts,
     unsupported_requirements: params.analysis.resume_match_basis?.unsupported_requirements ?? [],
-    recommended_cover_letter_focus: params.analysis.recommended_cover_letter_focus,
+    recommended_cover_letter_focus: coverLetterFocus,
     style_instruction: params.instruction || params.analysis.cover_letter_brief.tone
   };
 
@@ -434,10 +464,15 @@ export async function generateCoverLetterWithAi(params: {
           'Ты пишешь короткое сопроводительное письмо на русском языке (3–5 предложений).\n' +
           'Структура: приветствие → «Рассматриваю вашу вакансию [title]» → 2–3 ключевые задачи из вакансии → 2–3 факта из резюме кандидата, подтверждённых данными → «Готов обсудить задачи, условия и формат работы».\n' +
           'Правила:\n' +
-          '- Используй только matched_requirements и candidate_strengths — факты, подтверждённые резюме.\n' +
+          '- Используй только relevant_candidate_facts и matched_requirements — факты, прямо связанные с задачами вакансии.\n' +
+          '- НЕ упоминай факты из excluded_facts — они нерелевантны для этой вакансии.\n' +
           '- Не используй unsupported_requirements и не утверждай опыт из avoid_claims.\n' +
           '- Не упоминай прошлых работодателей и названия компаний — пиши только о задачах и опыте.\n' +
           '- Не обещай удалёнку, офис, гибрид, командировки или конкретный график — пиши только «готов обсудить условия и формат работы».\n' +
+          '- KPI, сокращение сроков согласования договоров — упоминай только если вакансия управленческая или про договорный поток.\n' +
+          '- Досудебное урегулирование, претензионная работа — только для претензионно-судебных позиций.\n' +
+          '- Руководство командой/отделом — только если вакансия руководящая или явно требует управление людьми.\n' +
+          '- Не писать «сейчас я руковожу...»; если руководство релевантно — «есть опыт руководства [функцией]».\n' +
           '- Не используй пафос: запрещены слова «уникальный», «идеальный», «выдающийся», «лучший», самопиар.\n' +
           '- Не придумывай опыт — только факты из резюме и confirmedFacts.\n' +
           '- Тон: деловой, спокойный, человечный, без штампов.' +

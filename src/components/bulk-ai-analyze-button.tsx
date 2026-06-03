@@ -199,43 +199,66 @@ export function BulkAiAnalyzeButton({
       {message ? <p className="text-xs text-[var(--muted)]">{message}</p> : null}
 
       {showModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-lg border border-[var(--line)] bg-[var(--surface)] p-5 shadow-lg">
-            <h3 className="text-lg font-semibold">Режим AI-анализа</h3>
-            <p className="mt-1 text-sm text-[var(--muted)]">По умолчанию — быстрый анализ (score без писем). Письма создавайте отдельно для рекомендованных.</p>
-            <div className="mt-4 grid gap-2 text-sm">
-              {(["fast", "full", "letters_only"] as AnalysisMode[]).map((item) => (
-                <label key={item} className="flex cursor-pointer gap-2 rounded-md border border-[var(--line)] p-3">
-                  <input type="radio" name="analysisMode" checked={mode === item} onChange={() => { setMode(item); setConfirmFull(false); }} />
-                  <span>
-                    <span className="font-medium">
-                      {item === "letters_only" ? "Создать письма для рекомендованных" : analysisModeLabels[item]}
-                    </span>
-                    {item === "fast" ? (
-                      <span className="mt-1 block text-xs text-[var(--muted)]">Рекомендуется для массового прогона: только score и фильтры, без писем.</span>
-                    ) : null}
-                    {item === "full" ? (
-                      <span className="mt-1 block text-xs text-amber-700 dark:text-amber-300">
-                        Полный анализ дольше и дороже: кроме score он может запускать проверку и создавать сопроводительные письма для рекомендованных. Лучше использовать его только для небольшого набора вакансий.
-                      </span>
-                    ) : null}
-                    {item === "letters_only" ? (
-                      <span className="mt-1 block text-xs text-[var(--muted)]">Только writer для вакансий AI рекомендует / готово к отклику без письма.</span>
-                    ) : null}
-                  </span>
-                </label>
-              ))}
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-2xl rounded-xl border border-[var(--line)] bg-[var(--background)] p-6 shadow-2xl">
+            <h3 className="text-xl font-semibold">Режим AI-анализа</h3>
+            <p className="mt-1 text-sm text-[var(--muted)]">Выберите режим. По умолчанию — быстрый анализ (score без писем). Письма создавайте отдельно для рекомендованных.</p>
+            <div className="mt-5 grid gap-3">
+              {(["fast", "full", "letters_only"] as AnalysisMode[]).map((item) => {
+                const modeLabel = item === "letters_only" ? "Создать письма для рекомендованных" : analysisModeLabels[item];
+                const isSelected = mode === item;
+                return (
+                  <label
+                    key={item}
+                    className={`flex cursor-pointer items-start gap-4 rounded-lg border p-4 transition-colors ${
+                      isSelected ? "border-[var(--accent)] bg-[var(--soft)]" : "border-[var(--line)] hover:border-[var(--accent)]/50"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="analysisMode"
+                      checked={isSelected}
+                      onChange={() => { setMode(item); setConfirmFull(false); }}
+                      className="mt-0.5 h-4 w-4 flex-none accent-[var(--accent)]"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium">{modeLabel}</div>
+                      {item === "fast" ? (
+                        <p className="mt-1 text-sm text-[var(--muted)]">
+                          Рекомендуется для массового прогона: только score и фильтры, без писем. Работает быстро и дёшево.
+                        </p>
+                      ) : null}
+                      {item === "full" ? (
+                        <>
+                          <p className="mt-1 text-sm text-[var(--muted)]">
+                            Полный анализ: score, проверка спорных вакансий, сопроводительные письма для рекомендованных.
+                          </p>
+                          <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                            Дольше и дороже быстрого анализа. Рекомендуем использовать только для небольшого набора вакансий.
+                          </div>
+                        </>
+                      ) : null}
+                      {item === "letters_only" ? (
+                        <p className="mt-1 text-sm text-[var(--muted)]">
+                          Только writer: создаёт письма для вакансий «AI рекомендует» и «Готово к отклику» без письма. Требует уже выполненного анализа.
+                        </p>
+                      ) : null}
+                    </div>
+                  </label>
+                );
+              })}
             </div>
             {confirmFull ? (
-              <p className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
-                Полный анализ на 20+ вакансий может занять много времени и токенов. Подтвердите запуск или выберите «Быстрый анализ».
-              </p>
+              <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                <div className="font-medium">Подтвердите полный анализ</div>
+                <p className="mt-1">Полный анализ на 20+ вакансий может занять много времени и токенов. Продолжить или выбрать быстрый анализ?</p>
+              </div>
             ) : null}
-            <div className="mt-4 flex gap-2">
+            <div className="mt-5 flex flex-wrap gap-3">
               <Button onClick={onLaunchClick}>{confirmFull ? "Подтвердить полный анализ" : "Запустить"}</Button>
-              <button type="button" className="text-sm underline" onClick={() => { setShowModal(false); setConfirmFull(false); }}>
+              <Button variant="secondary" onClick={() => { setShowModal(false); setConfirmFull(false); }}>
                 Отмена
-              </button>
+              </Button>
             </div>
           </div>
         </div>
