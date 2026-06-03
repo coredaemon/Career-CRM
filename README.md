@@ -129,20 +129,25 @@ Actions:
 
 If the analyst model returns text instead of JSON, CareerOS retries up to 3 times, then saves the vacancy with `Ошибка анализа`.
 
-On the vacancy page you will see:
-
-- title: `AI не смог вернуть корректный анализ`
-- actions: `Повторить AI-анализ`, `Настройки AI`, `Оставить на ручную проверку`
+On the vacancy page you will see an explanation that the model may have received garbage text (cookie banners, navigation) or failed JSON formatting, plus actions: check vacancy text, retry fast analysis, manual review, or mark as junk.
 
 Writer and reviewer are not called when analysis JSON is invalid.
 
+### HH service pages and invalid sources
+
+During hh browser search, CareerOS collects links matching `/vacancy/` in the DOM. That selector can occasionally capture hh service URLs such as `/search/vacancy/advanced` instead of a real vacancy card. CareerOS now validates URLs and page content **before saving** and **before AI analysis**.
+
+If a record is not a real vacancy:
+
+- status becomes `Невалидный источник` (`invalid_source`)
+- AI is not called (no token waste)
+- the vacancy appears under **Невалидные источники** on `/vacancies`
+
+Use **Найти мусорные вакансии** on `/vacancies` to scan existing junk and mark it safely without deleting rows.
+
 ### Recommended vacancies
 
-After successful analysis:
-
-- high-confidence `yes` → `Готово к отклику` (with cover letter)
-- strong match with `maybe` and score ≥ 75 → `AI рекомендует`
-- open `Рекомендованные` or the `Готово к отклику` tab
+After successful **fast** analysis, use **Создать письма для рекомендованных** for bulk cover letters. Full analysis adds reviewer for borderline scores; letters are still created only for recommended vacancies, not for every row in the batch.
 
 Use `Пересчитать статистику` on run details if top counters and the vacancy list disagree.
 

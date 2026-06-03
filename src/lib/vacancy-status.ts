@@ -10,6 +10,8 @@ export const vacancyStatuses = [
   "no_response",
   "archived",
   "skipped",
+  "skipped_invalid",
+  "invalid_source",
   "analysis_error"
 ] as const;
 
@@ -27,6 +29,8 @@ export const vacancyStatusLabels: Record<VacancyStatus, string> = {
   no_response: "Нет ответа",
   archived: "Архив",
   skipped: "Пропущена",
+  skipped_invalid: "Невалидная",
+  invalid_source: "Невалидный источник",
   analysis_error: "Ошибка анализа"
 };
 

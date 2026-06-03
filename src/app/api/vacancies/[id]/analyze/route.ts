@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { parseAnalysisMode } from "@/lib/analysis-mode";
 import { prisma } from "@/lib/prisma";
 import { getUserSettings } from "@/lib/settings";
 import { analyzeStoredVacancy } from "@/lib/vacancy-ai-workflow";
 
 const analyzeSchema = z.object({
-  resumeId: z.string().optional().nullable()
+  resumeId: z.string().optional().nullable(),
+  mode: z.enum(["fast", "full", "letters_only"]).optional().default("fast")
 });
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -32,7 +34,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const result = await analyzeStoredVacancy({
       vacancyId: vacancy.id,
       resumeId,
-      searchProfileId: vacancy.searchProfileId
+      searchProfileId: vacancy.searchProfileId,
+      mode: parseAnalysisMode(body.mode)
     });
 
     return NextResponse.json({ ok: true, ...result });

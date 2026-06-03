@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CopyButton } from "@/components/copy-button";
 import { CoverLetterTools } from "@/components/cover-letter-tools";
+import { InvalidVacancyPanel } from "@/components/invalid-vacancy-panel";
 import { VacancyAiErrorPanel } from "@/components/vacancy-ai-error-panel";
 import { VacancyAiRetryButton } from "@/components/vacancy-ai-retry-button";
 import { VacancyQuickActions } from "@/components/vacancy-quick-actions";
@@ -9,6 +10,7 @@ import { VacancyStatusSelect } from "@/components/vacancy-status-select";
 import { Card, PageHeader } from "@/components/ui";
 import { fromJsonText } from "@/lib/json";
 import { prisma } from "@/lib/prisma";
+import { validateVacancyDraft } from "@/lib/vacancy-validation";
 import { vacancyStatusLabel } from "@/lib/vacancy-status";
 
 export const dynamic = "force-dynamic";
@@ -45,6 +47,17 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
 
   if (!vacancy) notFound();
 
+  const descriptionValidation = validateVacancyDraft({
+    title: vacancy.title,
+    companyName: vacancy.company?.name,
+    source: vacancy.source,
+    sourceUrl: vacancy.sourceUrl,
+    sourceVacancyId: vacancy.sourceVacancyId,
+    rawDescription: vacancy.rawDescription
+  });
+  const looksLikeServicePage = !descriptionValidation.ok && descriptionValidation.code === "COOKIE_OR_NAVIGATION_PAGE";
+  const isInvalidSource = vacancy.status === "invalid_source" || vacancy.status === "skipped_invalid";
+
   const analysis = fromJsonText<VacancyAnalysisView>(vacancy.aiAnalysisJson, {});
   const latestLetter = vacancy.coverLetters[0];
   const followUpText = buildFollowUpText(vacancy);
@@ -63,12 +76,20 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
       />
       <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
         <div className="grid gap-6">
+          {isInvalidSource ? (
+            <InvalidVacancyPanel
+              vacancyId={vacancy.id}
+              sourceUrl={vacancy.sourceUrl}
+              reason={vacancy.analysisErrorMessage || vacancy.recommendation}
+            />
+          ) : null}
           {vacancy.status === "analysis_error" ? (
             <VacancyAiErrorPanel
               vacancyId={vacancy.id}
               errorCode={vacancy.analysisErrorCode}
               errorMessage={vacancy.analysisErrorMessage || vacancy.recommendation}
               technicalDetails={vacancy.analysisErrorCode === "INVALID_AI_JSON" ? vacancy.recommendation || undefined : undefined}
+              looksLikeServicePage={looksLikeServicePage}
             />
           ) : null}
           <Card>
@@ -88,7 +109,12 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
                 </a>
               </p>
             ) : null}
-            <pre className="mt-5 whitespace-pre-wrap rounded-md border border-[var(--line)] bg-[var(--soft)] p-4 text-sm leading-6">
+            {looksLikeServicePage && !isInvalidSource ? (
+              <p className="mt-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                Описание похоже на служебный текст страницы, а не на текст вакансии.
+              </p>
+            ) : null}
+            <pre id="vacancy-description" className="mt-5 whitespace-pre-wrap rounded-md border border-[var(--line)] bg-[var(--soft)] p-4 text-sm leading-6">
               {vacancy.rawDescription || "Описание не сохранено."}
             </pre>
           </Card>
@@ -182,7 +208,7 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
           </Card>
           <Card>
             <h2 className="mb-3 text-lg font-semibold tracking-normal">Быстрые действия</h2>
-            <VacancyQuickActions vacancyId={vacancy.id} sourceUrl={vacancy.sourceUrl} />
+            <VacancyQuickActions vacancyId={vacancy.id} sourceUrl={vacancy.sourceUrl} hideApply={isInvalidSource} />
           </Card>
           <Card>
             <h2 className="mb-3 text-lg font-semibold tracking-normal">AI-анализ</h2>

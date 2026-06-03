@@ -1,7 +1,13 @@
-import { analysisModeLabels, type AnalysisMode } from "./analysis-mode.ts";
-
 export const STALE_AFTER_MS = 10 * 60 * 1000;
 export const AI_TIMEOUT_MS = 90_000;
+
+type AnalysisMode = "fast" | "full" | "letters_only";
+
+const analysisModeLabels: Record<AnalysisMode, string> = {
+  fast: "Быстрый анализ",
+  full: "Полный анализ",
+  letters_only: "Только письма для рекомендованных"
+};
 
 export type ProcessStatus =
   | "queued"
@@ -159,6 +165,7 @@ export function computeEta(processed: number, total: number, startedAt: Date, fi
 export function vacancyEligibleForBulkWhere() {
   return {
     searchProfileId: { not: null },
+    status: { notIn: ["invalid_source", "skipped_invalid", "archived", "applied"] },
     OR: [{ matchScore: null }, { aiAnalysisJson: null }, { status: "analysis_error" as const }]
   };
 }

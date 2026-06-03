@@ -1,5 +1,7 @@
 import path from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
+import { extractHhVacancyId, isHhVacancyUrl, normalizeHhVacancyUrl } from "@/lib/hh-url";
+import { validateVacancyDraft, validationReasonToLog } from "@/lib/vacancy-validation";
 
 export type HhSearchParams = {
   queries: string[];
@@ -36,9 +38,17 @@ export type HhVacancyDraft = {
   extractionWarning?: string | null;
 };
 
+export type HhSkippedItem = {
+  sourceUrl: string;
+  status: "skipped_not_vacancy" | "skipped_invalid_description";
+  errorCode: string;
+  errorMessage: string;
+};
+
 export type HhSearchResult = {
   foundLinks: string[];
   vacancies: HhVacancyDraft[];
+  skippedItems: HhSkippedItem[];
   errors: string[];
   stoppedByCaptcha: boolean;
   stoppedByUser: boolean;
@@ -50,6 +60,7 @@ export async function collectHhVacancies(params: HhSearchParams): Promise<HhSear
   let context: BrowserContext | null = null;
   const foundLinks: string[] = [];
   const vacancies: HhVacancyDraft[] = [];
+  const skippedItems: HhSkippedItem[] = [];
   const errors: string[] = [];
   let stoppedByCaptcha = false;
   let stoppedByUser = false;
@@ -64,6 +75,11 @@ export async function collectHhVacancies(params: HhSearchParams): Promise<HhSear
       await emit({ type: "stage", stage: "stopped", message: "Остановка запрошена пользователем." });
     }
     return stopped;
+  };
+
+  const skipLink = async (item: HhSkippedItem) => {
+    skippedItems.push(item);
+    await emit({ type: "error", message: item.errorMessage });
   };
 
   try {
@@ -112,8 +128,20 @@ export async function collectHhVacancies(params: HhSearchParams): Promise<HhSear
       let addedForQuery = 0;
       for (const link of links) {
         if (foundLinks.length >= params.totalLimit) break;
-        if (!foundLinks.includes(link)) {
-          foundLinks.push(link);
+
+        if (!isHhVacancyUrl(link)) {
+          await skipLink({
+            sourceUrl: link,
+            status: "skipped_not_vacancy",
+            errorCode: "NOT_HH_VACANCY_URL",
+            errorMessage: `Пропущена служебная ссылка hh: ${link}`
+          });
+          continue;
+        }
+
+        const canonical = normalizeHhVacancyUrl(link)!;
+        if (!foundLinks.includes(canonical)) {
+          foundLinks.push(canonical);
           addedForQuery += 1;
         }
         if (addedForQuery >= params.limitPerQuery) break;
@@ -126,6 +154,17 @@ export async function collectHhVacancies(params: HhSearchParams): Promise<HhSear
     const linksToOpen = foundLinks.slice(0, params.totalLimit);
     for (const [index, link] of linksToOpen.entries()) {
       if (vacancies.length >= params.totalLimit || stoppedByCaptcha || (await shouldStop())) break;
+
+      if (!isHhVacancyUrl(link)) {
+        await skipLink({
+          sourceUrl: link,
+          status: "skipped_not_vacancy",
+          errorCode: "NOT_HH_VACANCY_URL",
+          errorMessage: `Пропущена служебная ссылка hh: ${link}`
+        });
+        continue;
+      }
+
       await emit({
         type: "card",
         sourceUrl: link,
@@ -143,6 +182,19 @@ export async function collectHhVacancies(params: HhSearchParams): Promise<HhSear
           await emit({ type: "error", message });
           break;
         }
+
+        const validation = validateVacancyDraft({ ...vacancy, source: "hh" });
+        if (!validation.ok) {
+          const logMsg = validationReasonToLog(validation.code, validation.reason);
+          await skipLink({
+            sourceUrl: link,
+            status: "skipped_invalid_description",
+            errorCode: validation.code || "UNKNOWN_BAD_PAGE",
+            errorMessage: `${logMsg}${validation.reason ? `: ${validation.reason}` : ""}`
+          });
+          continue;
+        }
+
         vacancies.push(vacancy);
         await emit({
           type: "card",
@@ -167,7 +219,7 @@ export async function collectHhVacancies(params: HhSearchParams): Promise<HhSear
     await context?.close().catch(() => undefined);
   }
 
-  return { foundLinks, vacancies, errors, stoppedByCaptcha, stoppedByUser };
+  return { foundLinks, vacancies, skippedItems, errors, stoppedByCaptcha, stoppedByUser };
 }
 
 function buildSearchUrl(query: string, params: HhSearchParams) {
@@ -206,6 +258,7 @@ async function isLoginHint(page: Page) {
 }
 
 async function extractVacancy(page: Page, sourceUrl: string): Promise<HhVacancyDraft> {
+  const normalizedUrl = normalizeHhVacancyUrl(sourceUrl) || sourceUrl;
   const bodyText = await page.locator("body").innerText({ timeout: 15000 }).catch(() => "");
   const title = (await firstText(page, ["h1", "[data-qa='vacancy-title']"])) || "Вакансия hh";
   const companyName = await firstText(page, ["[data-qa='vacancy-company-name']", "a[href*='/employer/']"]);
@@ -226,8 +279,8 @@ async function extractVacancy(page: Page, sourceUrl: string): Promise<HhVacancyD
   return {
     title: clean(title) || "Вакансия hh",
     companyName: clean(companyName),
-    sourceUrl,
-    sourceVacancyId: sourceUrl.match(/vacancy\/(\d+)/)?.[1] || null,
+    sourceUrl: normalizedUrl,
+    sourceVacancyId: extractHhVacancyId(normalizedUrl),
     salaryText: clean(salaryText),
     location: shortenLocation(clean(locationRaw)),
     workFormat,

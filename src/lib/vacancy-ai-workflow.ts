@@ -12,11 +12,12 @@ import {
   analysisModeIncludesWriter,
   parseAnalysisMode
 } from "@/lib/analysis-mode";
-import { AiAnalysisError } from "@/lib/ai-errors";
+import { AiAnalysisError, INVALID_VACANCY_SOURCE_MESSAGE } from "@/lib/ai-errors";
 import { fromJsonText } from "@/lib/json";
 import { prisma } from "@/lib/prisma";
 import { statusFromAiAnalysis } from "@/lib/vacancy-status";
 import { vacancyAnalysisStorage } from "@/lib/vacancy-service";
+import { validateVacancyDraft } from "@/lib/vacancy-validation";
 
 async function markVacancyAnalysisError(vacancyId: string, params: { code: string; message: string; technicalDetails?: string }) {
   await prisma.vacancy.update({
@@ -38,7 +39,7 @@ export async function analyzeStoredVacancy(params: {
   processRunId?: string;
   onLog?: (message: string) => void | Promise<void>;
 }) {
-  const mode = parseAnalysisMode(params.mode ?? "full");
+  const mode = parseAnalysisMode(params.mode ?? "fast");
   const aiContext = { vacancyId: params.vacancyId, processRunId: params.processRunId };
 
   const [vacancy, resume, profile, existingLetter] = await Promise.all([
@@ -53,6 +54,7 @@ export async function analyzeStoredVacancy(params: {
     companyName: vacancy.company?.name || undefined,
     source: vacancy.source,
     sourceUrl: vacancy.sourceUrl || undefined,
+    sourceVacancyId: vacancy.sourceVacancyId || undefined,
     salaryText: vacancy.salaryText || undefined,
     location: vacancy.location || undefined,
     workFormat: vacancy.workFormat || undefined,
@@ -62,6 +64,27 @@ export async function analyzeStoredVacancy(params: {
     isArchived: vacancy.isArchived || undefined,
     testRequired: vacancy.testRequired || undefined
   };
+
+  if (mode !== "letters_only") {
+    const validation = validateVacancyDraft(vacancyPayload);
+    if (!validation.ok) {
+      await prisma.vacancy.update({
+        where: { id: vacancy.id },
+        data: {
+          status: "invalid_source",
+          analysisErrorCode: "INVALID_VACANCY_SOURCE",
+          analysisErrorMessage: INVALID_VACANCY_SOURCE_MESSAGE,
+          recommendation: validation.reason || INVALID_VACANCY_SOURCE_MESSAGE
+        }
+      });
+      await params.onLog?.("Пропущено: невалидная вакансия");
+      throw new AiAnalysisError({
+        code: "INVALID_VACANCY_SOURCE",
+        userMessage: INVALID_VACANCY_SOURCE_MESSAGE,
+        technicalDetails: validation.reason
+      });
+    }
+  }
 
   const searchProfilePayload = profile
     ? {
@@ -169,9 +192,8 @@ export async function analyzeStoredVacancy(params: {
         score: analysis.vacancy_match_score
       });
       const shouldWrite =
-        mode === "full" ||
-        status === "ai_recommended" ||
-        status === "ready_to_apply";
+        analysisModeIncludesWriter(mode) &&
+        (status === "ai_recommended" || status === "ready_to_apply");
 
       if (shouldWrite) {
         await params.onLog?.("Создаём сопроводительное письмо.");

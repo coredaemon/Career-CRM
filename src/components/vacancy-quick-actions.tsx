@@ -4,7 +4,15 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui";
 
-export function VacancyQuickActions({ vacancyId, sourceUrl }: { vacancyId: string; sourceUrl?: string | null }) {
+export function VacancyQuickActions({
+  vacancyId,
+  sourceUrl,
+  hideApply = false
+}: {
+  vacancyId: string;
+  sourceUrl?: string | null;
+  hideApply?: boolean;
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -23,12 +31,14 @@ export function VacancyQuickActions({ vacancyId, sourceUrl }: { vacancyId: strin
     <div className="flex flex-wrap gap-2">
       {sourceUrl ? (
         <a href={sourceUrl} target="_blank" rel="noreferrer" className="rounded-md border border-[var(--line)] px-4 py-2 text-sm hover:bg-[var(--soft)]">
-          Открыть на hh
+          {hideApply ? "Открыть источник" : "Открыть на hh"}
         </a>
       ) : null}
-      <Button onClick={() => run("applied")} disabled={Boolean(busy)}>
-        {busy === "applied" ? "Отмечаем..." : "Отклик отправлен"}
-      </Button>
+      {!hideApply ? (
+        <Button onClick={() => run("applied")} disabled={Boolean(busy)}>
+          {busy === "applied" ? "Отмечаем..." : "Отклик отправлен"}
+        </Button>
+      ) : null}
       <Button variant="secondary" onClick={() => run("check_later")} disabled={Boolean(busy)}>
         Проверить позже
       </Button>

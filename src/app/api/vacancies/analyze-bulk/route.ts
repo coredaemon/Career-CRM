@@ -4,7 +4,7 @@ import { analysisModeLabels, parseAnalysisMode, type AnalysisMode } from "@/lib/
 import { AiAnalysisError } from "@/lib/ai-errors";
 import { prisma } from "@/lib/prisma";
 import { findBlockingVacancyAnalysisProcess } from "@/lib/process-queries";
-import { buildProcessRunUiState } from "@/lib/process-status";
+import { buildProcessRunUiState, vacancyEligibleForBulkWhere } from "@/lib/process-status";
 import {
   appendProcessLog,
   createProcessRun,
@@ -17,6 +17,7 @@ import {
   updateProcessRunItem
 } from "@/lib/process-run-service";
 import { getUserSettings } from "@/lib/settings";
+import { isVacancyValidForAnalysis } from "@/lib/vacancy-analysis-eligibility";
 import { analyzeStoredVacancy } from "@/lib/vacancy-ai-workflow";
 
 const bulkSchema = z.object({
@@ -34,18 +35,20 @@ function logPrefix(index: number, total: number) {
   return `[${index + 1}/${total}]`;
 }
 
-async function runBulkAnalysis(
-  processId: string,
-  mode: AnalysisMode,
-  vacancies: Array<{
-    id: string;
-    title: string;
-    rawDescription: string | null;
-    searchProfileId: string | null;
-    status: string;
-    searchProfile: { resumeId: string } | null;
-  }>
-) {
+type BulkVacancy = {
+  id: string;
+  title: string;
+  source: string;
+  sourceUrl: string | null;
+  sourceVacancyId: string | null;
+  rawDescription: string | null;
+  searchProfileId: string | null;
+  status: string;
+  searchProfile: { resumeId: string } | null;
+  company: { name: string | null } | null;
+};
+
+async function runBulkAnalysis(processId: string, mode: AnalysisMode, vacancies: BulkVacancy[]) {
   let analyzed = 0;
   let skipped = 0;
   let errors = 0;
@@ -109,15 +112,31 @@ async function runBulkAnalysis(
         continue;
       }
 
-      if (mode !== "letters_only" && (!vacancy.rawDescription || vacancy.rawDescription.length < 300)) {
-        skipped += 1;
-        await prisma.vacancy.update({
-          where: { id: vacancy.id },
-          data: { status: "needs_review", recommendation: "Не удалось извлечь полный текст вакансии. Проверьте вручную." }
-        });
-        await appendProcessLog(processId, "warning", `${logPrefix(index, total)} Пропущено: ${vacancy.title} — недостаточно текста.`);
-        await finishItem({ status: "skipped", startedAt });
-        continue;
+      if (mode !== "letters_only") {
+        const validation = isVacancyValidForAnalysis(vacancy);
+        if (!validation.ok) {
+          skipped += 1;
+          await prisma.vacancy.update({
+            where: { id: vacancy.id },
+            data: {
+              status: "invalid_source",
+              analysisErrorCode: "INVALID_VACANCY_SOURCE",
+              analysisErrorMessage: "Это не похоже на страницу вакансии. AI-анализ не запускался."
+            }
+          });
+          await appendProcessLog(
+            processId,
+            "warning",
+            `${logPrefix(index, total)} Пропущено: невалидная вакансия — ${validation.reason || "не похоже на вакансию"}.`
+          );
+          await finishItem({
+            status: "skipped",
+            errorCode: validation.code || "INVALID_VACANCY_SOURCE",
+            errorMessage: validation.reason,
+            startedAt
+          });
+          continue;
+        }
       }
 
       if (mode === "letters_only") {
@@ -125,7 +144,7 @@ async function runBulkAnalysis(
           (vacancy.status === "ai_recommended" || vacancy.status === "ready_to_apply") && vacancy.searchProfile?.resumeId;
         if (!eligible) {
           skipped += 1;
-          await appendProcessLog(processId, "warning", `${logPrefix(index, total)} Пропущено: ${vacancy.title} — не рекомендована или нет письма.`);
+          await appendProcessLog(processId, "warning", `${logPrefix(index, total)} Пропущено: ${vacancy.title} — не рекомендована.`);
           await finishItem({ status: "skipped", startedAt });
           continue;
         }
@@ -153,7 +172,6 @@ async function runBulkAnalysis(
         );
         await finishItem({ status: "completed", startedAt });
       } catch (error) {
-        errors += 1;
         const code = error instanceof AiAnalysisError ? error.code : "AI_ANALYSIS_FAILED";
         const message =
           error instanceof AiAnalysisError
@@ -161,6 +179,15 @@ async function runBulkAnalysis(
             : error instanceof Error
               ? error.message
               : "AI-анализ не удался";
+
+        if (code === "INVALID_VACANCY_SOURCE") {
+          skipped += 1;
+          await appendProcessLog(processId, "warning", `${logPrefix(index, total)} Пропущено: невалидная вакансия.`);
+          await finishItem({ status: "skipped", errorCode: code, errorMessage: message, startedAt });
+          continue;
+        }
+
+        errors += 1;
         errorMessages.push(`${vacancy.title}: ${message}`);
         const detail =
           code === "INVALID_AI_JSON"
@@ -205,6 +232,21 @@ async function runBulkAnalysis(
   }
 }
 
+function bulkWhere(body: z.infer<typeof bulkSchema>) {
+  if (body.vacancyIds?.length) return { id: { in: body.vacancyIds } };
+  if (body.retryErrorsOnly) {
+    return { status: "analysis_error", searchProfileId: { not: null } };
+  }
+  if (body.analysisMode === "letters_only") {
+    return {
+      status: { in: ["ai_recommended", "ready_to_apply"] },
+      searchProfileId: { not: null },
+      coverLetters: { none: {} }
+    };
+  }
+  return vacancyEligibleForBulkWhere();
+}
+
 export async function POST(request: Request) {
   try {
     const body = bulkSchema.parse(await request.json().catch(() => ({})));
@@ -231,25 +273,27 @@ export async function POST(request: Request) {
       }
     }
 
-    const vacancies = await prisma.vacancy.findMany({
-      where: body.vacancyIds?.length
-        ? { id: { in: body.vacancyIds } }
-        : body.retryErrorsOnly
-          ? { status: "analysis_error", searchProfileId: { not: null } }
-          : mode === "letters_only"
-            ? {
-                status: { in: ["ai_recommended", "ready_to_apply"] },
-                searchProfileId: { not: null },
-                coverLetters: { none: {} }
-              }
-            : {
-                OR: [{ matchScore: null }, { aiAnalysisJson: null }, { status: "analysis_error" }],
-                searchProfileId: { not: null }
-              },
-      take: body.limit,
+    const candidates = await prisma.vacancy.findMany({
+      where: bulkWhere(body),
+      take: Math.min(body.limit * 3, 50),
       orderBy: { createdAt: "asc" },
-      include: { searchProfile: true }
+      include: { searchProfile: true, company: true }
     });
+
+    const validVacancies: BulkVacancy[] = [];
+    let invalidCount = 0;
+
+    for (const vacancy of candidates) {
+      if (validVacancies.length >= body.limit) break;
+      if (mode !== "letters_only") {
+        const validation = isVacancyValidForAnalysis(vacancy);
+        if (!validation.ok) {
+          invalidCount += 1;
+          continue;
+        }
+      }
+      validVacancies.push(vacancy);
+    }
 
     const title =
       mode === "letters_only"
@@ -261,30 +305,36 @@ export async function POST(request: Request) {
     const process = await createProcessRun({
       type: "vacancy_analysis",
       title,
-      description: `Выбрано вакансий: ${vacancies.length}`,
-      progressTotal: vacancies.length,
+      description: `К AI-анализу: ${validVacancies.length}`,
+      progressTotal: validVacancies.length,
       analysisMode: mode,
-      metadata: { retryErrorsOnly: body.retryErrorsOnly, analysisMode: mode }
+      metadata: { retryErrorsOnly: body.retryErrorsOnly, analysisMode: mode, selected: candidates.length, invalid: invalidCount }
     });
 
     await createProcessRunItems(
       process.id,
-      vacancies.map((v) => ({ vacancyId: v.id, title: v.title }))
+      validVacancies.map((v) => ({ vacancyId: v.id, title: v.title }))
     );
 
     await startProcessRun(process.id, "preparing");
+    await appendProcessLog(process.id, "info", `Выбрано ${candidates.length} вакансий.`);
+    if (invalidCount > 0) {
+      await appendProcessLog(process.id, "warning", `Пропущено ${invalidCount} невалидные.`);
+    }
     await appendProcessLog(
       process.id,
       "info",
-      `Запущен массовый AI-анализ: ${vacancies.length} вакансий, режим ${analysisModeLabels[mode]}.`
+      `К AI-анализу отправлено ${validVacancies.length}, режим ${analysisModeLabels[mode]}.`
     );
 
-    void runBulkAnalysis(process.id, mode, vacancies);
+    void runBulkAnalysis(process.id, mode, validVacancies);
 
     return NextResponse.json({
       ok: true,
       processRunId: process.id,
-      total: vacancies.length,
+      total: validVacancies.length,
+      selected: candidates.length,
+      skippedInvalid: invalidCount,
       analysisMode: mode
     });
   } catch (error) {

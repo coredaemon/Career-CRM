@@ -241,7 +241,7 @@ export function HhSearchForm({ profiles }: { profiles: ProfileOption[] }) {
         </label>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={analyzeAfterCollect} onChange={(event) => setAnalyzeAfterCollect(event.target.checked)} />
-          Проанализировать новые вакансии AI после сбора
+          Быстрый AI-анализ после сбора (score без писем)
         </label>
       </Card>
 

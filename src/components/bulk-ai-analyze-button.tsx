@@ -56,6 +56,7 @@ export function BulkAiAnalyzeButton({
   const [showModal, setShowModal] = useState(false);
   const [mode, setMode] = useState<AnalysisMode>(defaultMode);
   const [blocking, setBlocking] = useState<NormalizedState | null>(null);
+  const [confirmFull, setConfirmFull] = useState(false);
 
   useEffect(() => {
     fetch("/api/processes/active")
@@ -136,7 +137,16 @@ export function BulkAiAnalyzeButton({
       void analyze("fast");
       return;
     }
+    setConfirmFull(false);
     setShowModal(true);
+  }
+
+  function onLaunchClick() {
+    if (mode === "full" && !confirmFull) {
+      setConfirmFull(true);
+      return;
+    }
+    void analyze(mode);
   }
 
   return (
@@ -186,29 +196,38 @@ export function BulkAiAnalyzeButton({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-lg border border-[var(--line)] bg-[var(--surface)] p-5 shadow-lg">
             <h3 className="text-lg font-semibold">Режим AI-анализа</h3>
-            <p className="mt-1 text-sm text-[var(--muted)]">Выберите, насколько полным должен быть пайплайн.</p>
+            <p className="mt-1 text-sm text-[var(--muted)]">По умолчанию — быстрый анализ (score без писем). Письма создавайте отдельно для рекомендованных.</p>
             <div className="mt-4 grid gap-2 text-sm">
               {(["fast", "full", "letters_only"] as AnalysisMode[]).map((item) => (
                 <label key={item} className="flex cursor-pointer gap-2 rounded-md border border-[var(--line)] p-3">
-                  <input type="radio" name="analysisMode" checked={mode === item} onChange={() => setMode(item)} />
+                  <input type="radio" name="analysisMode" checked={mode === item} onChange={() => { setMode(item); setConfirmFull(false); }} />
                   <span>
-                    <span className="font-medium">{analysisModeLabels[item]}</span>
+                    <span className="font-medium">
+                      {item === "letters_only" ? "Создать письма для рекомендованных" : analysisModeLabels[item]}
+                    </span>
                     {item === "fast" ? (
-                      <span className="mt-1 block text-xs text-[var(--muted)]">Только score и фильтры, без писем.</span>
+                      <span className="mt-1 block text-xs text-[var(--muted)]">Рекомендуется для массового прогона: только score и фильтры, без писем.</span>
                     ) : null}
                     {item === "full" ? (
-                      <span className="mt-1 block text-xs text-[var(--muted)]">Анализ, reviewer, письма — медленнее.</span>
+                      <span className="mt-1 block text-xs text-amber-700 dark:text-amber-300">
+                        Полный анализ дольше и дороже: кроме score он может запускать проверку и создавать сопроводительные письма для рекомендованных. Лучше использовать его только для небольшого набора вакансий.
+                      </span>
                     ) : null}
                     {item === "letters_only" ? (
-                      <span className="mt-1 block text-xs text-[var(--muted)]">Письма для рекомендованных без письма.</span>
+                      <span className="mt-1 block text-xs text-[var(--muted)]">Только writer для вакансий AI рекомендует / готово к отклику без письма.</span>
                     ) : null}
                   </span>
                 </label>
               ))}
             </div>
+            {confirmFull ? (
+              <p className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                Полный анализ на 20+ вакансий может занять много времени и токенов. Подтвердите запуск или выберите «Быстрый анализ».
+              </p>
+            ) : null}
             <div className="mt-4 flex gap-2">
-              <Button onClick={() => void analyze(mode)}>Запустить</Button>
-              <button type="button" className="text-sm underline" onClick={() => setShowModal(false)}>
+              <Button onClick={onLaunchClick}>{confirmFull ? "Подтвердить полный анализ" : "Запустить"}</Button>
+              <button type="button" className="text-sm underline" onClick={() => { setShowModal(false); setConfirmFull(false); }}>
                 Отмена
               </button>
             </div>

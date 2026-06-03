@@ -13,7 +13,10 @@ export class AiAnalysisError extends Error {
 }
 
 export const INVALID_AI_JSON_MESSAGE =
-  "Модель аналитика ответила не в том формате. Вакансия сохранена, но анализ не выполнен.";
+  "AI получил текст, но не смог вернуть структурированный анализ. Частая причина — модель плохо соблюдает JSON-формат или в вакансию попал мусорный текст.";
+
+export const INVALID_VACANCY_SOURCE_MESSAGE =
+  "Это не похоже на страницу вакансии. AI-анализ не запускался.";
 
 export function sanitizeAiErrorMessage(message: string) {
   return message

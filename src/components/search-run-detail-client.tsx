@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { useProcessPolling } from "@/hooks/use-process-polling";
 import { formatDuration, searchRunStatusLabel, searchStageLabel } from "@/lib/process-status";
+import { searchRunItemStatusLabel } from "@/lib/search-run-stats";
 import { vacancyStatusLabel } from "@/lib/vacancy-status";
 import { Button, Card } from "@/components/ui";
 import { BulkAiAnalyzeButton } from "@/components/bulk-ai-analyze-button";
@@ -133,10 +134,15 @@ export function SearchRunDetailClient({ initial }: { initial: InitialRun }) {
         ) : null}
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <Metric label="Найдено" value={run.totalFound} />
+          <Metric label="Валидных" value={progress.validVacancies ?? run.totalCreated} />
           <Metric label="Новых" value={run.totalCreated} />
           <Metric label="Дублей" value={run.totalDuplicates} />
+          <Metric label="Пропущено URL" value={progress.skippedNotVacancy ?? 0} />
+          <Metric label="Плохое описание" value={progress.skippedInvalidDescription ?? 0} />
+          <Metric label="Отправлено в AI" value={progress.sentToAi ?? run.totalAnalyzed} />
           <Metric label="AI завершено" value={run.totalAnalyzed} />
           <Metric label="AI ошибок" value={run.totalAnalysisErrors} />
+          <Metric label="Невалидных" value={progress.invalidSource ?? 0} />
           <Metric label="Рекомендовано" value={run.totalRecommended} />
           <Metric label="Писем" value={run.totalCoverLetters} />
           <Metric label="Ошибок" value={run.totalErrors} />
@@ -177,12 +183,15 @@ export function SearchRunDetailClient({ initial }: { initial: InitialRun }) {
                       {item.vacancy.title}
                     </Link>
                     <div className="mt-1 text-xs text-[var(--muted)]">
-                      {item.vacancy.companyName || "компания не указана"} · карточка: {item.status} · вакансия:{" "}
+                      {item.vacancy.companyName || "компания не указана"} · карточка: {searchRunItemStatusLabel(item.status)} · вакансия:{" "}
                       {vacancyStatusLabel(item.vacancy.status)}
                     </div>
                   </>
                 ) : (
-                  <div className="font-medium">{item.sourceUrl}</div>
+                  <div>
+                    <div className="font-medium">{item.sourceUrl}</div>
+                    <div className="mt-1 text-xs text-[var(--muted)]">{searchRunItemStatusLabel(item.status)}</div>
+                  </div>
                 )}
                 {item.errorMessage ? <p className="mt-2 text-xs text-amber-700">{item.errorMessage}</p> : null}
               </div>
@@ -243,6 +252,9 @@ export function SearchRunDetailClient({ initial }: { initial: InitialRun }) {
             <p>Новых: {run.totalCreated}</p>
             <p>Дублей: {run.totalDuplicates}</p>
             <p>AI проанализировал: {run.totalAnalyzed}</p>
+            <p>Пропущено служебных URL: {progress.skippedNotVacancy ?? 0}</p>
+            <p>Пропущено из-за описания: {progress.skippedInvalidDescription ?? 0}</p>
+            <p>Невалидных источников: {progress.invalidSource ?? 0}</p>
             <p>Ошибок анализа: {run.totalAnalysisErrors}</p>
             <p>Рекомендовано: {run.totalRecommended}</p>
             <p>Готово к отклику (с письмами): {progress.readyToApply ?? run.totalCoverLetters}</p>

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Prisma } from "@prisma/client";
 import { BulkAiAnalyzeButton } from "@/components/bulk-ai-analyze-button";
+import { JunkVacancyActions } from "@/components/junk-vacancy-actions";
 import { getActiveProcessesSummary } from "@/lib/active-processes";
 import { countVacanciesEligibleForBulk } from "@/lib/process-queries";
 import { CopyButton } from "@/components/copy-button";
@@ -21,6 +22,7 @@ const tabs = [
   { label: "Готово к отклику", status: "ready_to_apply" },
   { label: "Без AI-анализа", status: "no_ai" },
   { label: "Ошибка анализа", status: "analysis_error" },
+  { label: "Невалидные источники", status: "invalid_source" },
   { label: "Отклик отправлен", status: "applied" },
   { label: "Архив", status: "archived" }
 ];
@@ -113,6 +115,16 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
         </Card>
       ) : null}
 
+      <Card className="mb-5">
+        <h2 className="text-lg font-semibold tracking-normal">Очистка мусорных записей hh</h2>
+        <p className="mt-1 text-sm text-[var(--muted)]">
+          Найдите служебные страницы hh (поиск, cookie/navigation) и пометьте их как невалидные источники без удаления из базы.
+        </p>
+        <div className="mt-4">
+          <JunkVacancyActions />
+        </div>
+      </Card>
+
       {vacancies.length === 0 ? (
         <EmptyState
           title={emptyTitle(totalVacancies, status, withoutAi)}
@@ -186,7 +198,9 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
 }
 
 function vacancyWhere(status?: string): Prisma.VacancyWhereInput | undefined {
-  if (!status) return undefined;
+  if (!status) {
+    return { status: { notIn: ["invalid_source", "skipped_invalid"] } };
+  }
   if (status === "no_ai") return { OR: [{ matchScore: null }, { aiAnalysisJson: null }] };
   if (status === "ai_recommended") return { status: "ai_recommended" };
   if (status === "ready_to_apply") {

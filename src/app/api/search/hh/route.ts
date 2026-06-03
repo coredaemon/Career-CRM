@@ -4,6 +4,7 @@ import { collectHhVacancies, type HhProgressEvent } from "@/lib/hh-search";
 import { prisma } from "@/lib/prisma";
 import { recalculateSearchRunStats } from "@/lib/search-run-stats";
 import { getUserSettings } from "@/lib/settings";
+import { validateVacancyDraft, validationReasonToLog } from "@/lib/vacancy-validation";
 import { analyzeStoredVacancy } from "@/lib/vacancy-ai-workflow";
 import { createInteraction, findOrCreateCompany, vacancyCreateData } from "@/lib/vacancy-service";
 
@@ -36,6 +37,10 @@ type ProgressState = {
   skippedByAi: number;
   coverLetters: number;
   analysisErrors: number;
+  skippedNotVacancy: number;
+  skippedInvalidDescription: number;
+  sentToAi: number;
+  invalidSource: number;
 };
 
 const initialProgress: ProgressState = {
@@ -50,7 +55,11 @@ const initialProgress: ProgressState = {
   needsReview: 0,
   skippedByAi: 0,
   coverLetters: 0,
-  analysisErrors: 0
+  analysisErrors: 0,
+  skippedNotVacancy: 0,
+  skippedInvalidDescription: 0,
+  sentToAi: 0,
+  invalidSource: 0
 };
 
 export async function POST(request: Request) {
@@ -144,6 +153,21 @@ export async function POST(request: Request) {
         errors.push(...collected.errors.filter((error) => !errors.includes(error)));
         progress.foundLinks = collected.foundLinks.length;
 
+        for (const skipped of collected.skippedItems) {
+          if (skipped.status === "skipped_not_vacancy") progress.skippedNotVacancy += 1;
+          if (skipped.status === "skipped_invalid_description") progress.skippedInvalidDescription += 1;
+          await prisma.searchRunItem.create({
+            data: {
+              searchRunId: runId,
+              sourceUrl: skipped.sourceUrl,
+              status: skipped.status,
+              errorCode: skipped.errorCode,
+              errorMessage: skipped.errorMessage
+            }
+          });
+          await log(skipped.errorMessage, "skipped");
+        }
+
         const newVacancyIds: string[] = [];
         await log("Сохраняем собранные вакансии.", "saving");
 
@@ -155,6 +179,23 @@ export async function POST(request: Request) {
           }
 
           try {
+            const validation = validateVacancyDraft({ ...item, source: "hh" });
+            if (!validation.ok) {
+              progress.skippedInvalidDescription += 1;
+              const logMsg = validationReasonToLog(validation.code, validation.reason);
+              await prisma.searchRunItem.create({
+                data: {
+                  searchRunId: runId,
+                  sourceUrl: item.sourceUrl,
+                  status: "skipped_invalid_description",
+                  errorCode: validation.code || "UNKNOWN_BAD_PAGE",
+                  errorMessage: validation.reason || logMsg
+                }
+              });
+              await log(`${logMsg}: ${item.sourceUrl}`, "skipped");
+              continue;
+            }
+
             const existing = await prisma.vacancy.findFirst({
               where: {
                 OR: [
@@ -239,19 +280,44 @@ export async function POST(request: Request) {
               break;
             }
 
-            const vacancy = await prisma.vacancy.findUnique({ where: { id: vacancyId }, select: { title: true, rawDescription: true } });
-            if (!vacancy?.rawDescription || vacancy.rawDescription.length < 300) {
-              progress.needsReview += 1;
+            const vacancy = await prisma.vacancy.findUnique({
+              where: { id: vacancyId },
+              select: { title: true, rawDescription: true, source: true, sourceUrl: true, company: { select: { name: true } } }
+            });
+
+            const aiValidation = validateVacancyDraft({
+              title: vacancy?.title,
+              companyName: vacancy?.company?.name,
+              source: vacancy?.source,
+              sourceUrl: vacancy?.sourceUrl,
+              rawDescription: vacancy?.rawDescription
+            });
+
+            if (!aiValidation.ok) {
+              progress.invalidSource += 1;
               await prisma.vacancy.update({
                 where: { id: vacancyId },
-                data: { status: "needs_review", recommendation: "Не удалось извлечь полный текст вакансии. Проверьте вручную." }
+                data: {
+                  status: "invalid_source",
+                  analysisErrorCode: "INVALID_VACANCY_SOURCE",
+                  analysisErrorMessage: "Это не похоже на страницу вакансии. AI-анализ не запускался."
+                }
               });
-              await log(`AI пропущен: ${vacancy?.title || vacancyId}. Недостаточно текста вакансии.`, "analyzing_ai");
+              await prisma.searchRunItem.updateMany({
+                where: { searchRunId: runId, vacancyId },
+                data: {
+                  status: "skipped_invalid_description",
+                  errorCode: aiValidation.code || "INVALID_VACANCY_SOURCE",
+                  errorMessage: aiValidation.reason || "Невалидная вакансия"
+                }
+              });
+              await log(`AI пропущен: ${vacancy?.title || vacancyId}. ${aiValidation.reason || "Невалидная вакансия."}`, "analyzing_ai");
               continue;
             }
 
             try {
-              await log(`Запускаем AI-анализ: ${vacancy.title}`, "analyzing_ai");
+              progress.sentToAi += 1;
+              await log(`Запускаем быстрый AI-анализ: ${vacancy?.title}`, "analyzing_ai");
               const result = await analyzeStoredVacancy({
                 vacancyId,
                 resumeId: body.resumeId,
@@ -264,9 +330,9 @@ export async function POST(request: Request) {
               if (result.vacancy.status === "needs_review") progress.needsReview += 1;
               if (result.vacancy.status === "rejected_by_ai") progress.skippedByAi += 1;
               await prisma.searchRunItem.updateMany({ where: { searchRunId: runId, vacancyId }, data: { status: "analyzed" } });
-              await log(`AI-анализ завершён: ${vacancy.title}`, "analyzing_ai");
+              await log(`AI-анализ завершён: ${result.vacancy.title}`, "analyzing_ai");
               if (result.coverLetterCreated) {
-                await log(`Сопроводительное создано: ${vacancy.title}`, "analyzing_ai");
+                await log(`Сопроводительное создано: ${result.vacancy.title}`, "analyzing_ai");
               }
             } catch (error) {
               const isInvalidJson = error instanceof AiAnalysisError && error.code === "INVALID_AI_JSON";
