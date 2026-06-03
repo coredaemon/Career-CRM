@@ -31,7 +31,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 const regenerateSchema = z.object({
   resumeId: z.string().min(1),
   instruction: z.string().trim().min(1),
-  overrideSalaryText: z.string().nullable().optional()
+  overrideSalaryText: z.string().nullable().optional(),
+  forbiddenFragments: z.array(z.string()).optional()
 });
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -69,7 +70,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       },
       salaryExpectationsRequested: analysis.salary_expectations_requested,
       salaryExpectationPreferredText: settings.salaryExpectationPreferredText,
-      overrideSalaryText: body.overrideSalaryText
+      overrideSalaryText: body.overrideSalaryText,
+      forbiddenFragments: body.forbiddenFragments
     });
 
     const coverLetter = await prisma.coverLetter.create({
@@ -81,17 +83,24 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       }
     });
 
+    const autoRegenNote = result.autoRegenerated
+      ? " [авто-перегенерация: критичные warnings в первой попытке]"
+      : "";
+    const warningCodes = result.warnings.length
+      ? ` Warnings: ${result.warnings.map((w) => w.code).join(", ")}.`
+      : "";
+
     await prisma.interaction.create({
       data: {
         vacancyId: vacancy.id,
         companyId: vacancy.companyId,
         type: "cover_letter_created",
         occurredAt: new Date(),
-        summary: `Сопроводительное письмо перегенерировано: ${body.instruction}.`
+        summary: `Сопроводительное письмо перегенерировано: ${body.instruction}.${autoRegenNote}${warningCodes}`
       }
     });
 
-    return NextResponse.json({ ok: true, coverLetter });
+    return NextResponse.json({ ok: true, coverLetter, warnings: result.warnings, autoRegenerated: result.autoRegenerated });
   } catch (error) {
     return NextResponse.json(
       { ok: false, message: error instanceof Error ? error.message : "Не удалось перегенерировать письмо." },

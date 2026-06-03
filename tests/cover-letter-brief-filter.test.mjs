@@ -5,20 +5,24 @@ import test from "node:test";
  * Unit tests for the cover letter brief relevance filter.
  * Tests the logic that selects only facts relevant to the vacancy from
  * the full candidate_strengths list.
+ *
+ * The updated filter checks both matchedRequirements AND jobPriorities
+ * (formerly only matchedRequirements).
  */
 
-function filterRelevantFacts(allStrengths, matchedRequirements) {
-  return allStrengths.filter((strength) => {
-    const strengthWords = strength.toLowerCase().split(/\s+/).filter((w) => w.length > 4);
-    return matchedRequirements.some((req) => {
-      const reqWords = req.toLowerCase().split(/\s+/).filter((w) => w.length > 4);
-      return strengthWords.some((sw) =>
-        reqWords.some(
-          (rw) => rw.startsWith(sw.slice(0, 5)) || sw.startsWith(rw.slice(0, 5))
-        )
-      );
-    });
+function isStrengthRelevant(strength, referenceTexts) {
+  const strengthWords = strength.toLowerCase().split(/\s+/).filter((w) => w.length > 4);
+  return referenceTexts.some((ref) => {
+    const refWords = ref.toLowerCase().split(/\s+/).filter((w) => w.length > 4);
+    return strengthWords.some((sw) =>
+      refWords.some((rw) => rw.startsWith(sw.slice(0, 5)) || sw.startsWith(rw.slice(0, 5)))
+    );
   });
+}
+
+function filterRelevantFacts(allStrengths, matchedRequirements, jobPriorities = []) {
+  const referenceTexts = [...matchedRequirements, ...jobPriorities];
+  return allStrengths.filter((strength) => isStrengthRelevant(strength, referenceTexts));
 }
 
 function getExcludedFacts(allStrengths, relevantFacts) {
@@ -111,4 +115,46 @@ test("relevant fact passes when multiple requirements overlap", () => {
 
   const relevant = filterRelevantFacts(allStrengths, matchedRequirements);
   assert.ok(relevant.length > 0, "overlapping requirement should include the fact");
+});
+
+test("filter includes fact matched via jobPriorities even if not in matchedRequirements", () => {
+  const allStrengths = [
+    "Подготовка правовых заключений и правовая экспертиза",
+    "Внедрил KPI для отдела"
+  ];
+  const matchedRequirements = [];
+  const jobPriorities = [
+    "правовые заключения по запросам бизнеса",
+    "экспертиза договоров"
+  ];
+
+  const relevant = filterRelevantFacts(allStrengths, matchedRequirements, jobPriorities);
+  const excluded = getExcludedFacts(allStrengths, relevant);
+
+  assert.ok(
+    relevant.some((f) => f.includes("заключений")),
+    "fact matched via jobPriorities should be included"
+  );
+  assert.ok(
+    excluded.some((f) => f.includes("KPI")),
+    "unrelated KPI fact should remain excluded"
+  );
+});
+
+test("empty matchedRequirements but non-empty jobPriorities selects relevant facts", () => {
+  const allStrengths = ["Сопровождение корпоративных процессов", "Ведение претензионной работы"];
+  const matchedRequirements = [];
+  const jobPriorities = ["корпоративное сопровождение и регистрационные процедуры"];
+
+  const relevant = filterRelevantFacts(allStrengths, matchedRequirements, jobPriorities);
+
+  assert.ok(relevant.some((f) => f.includes("корпоративных")), "corporate fact should match jobPriorities");
+  assert.equal(relevant.filter((f) => f.includes("претензи")).length, 0, "litigation fact should not match");
+});
+
+test("empty matchedRequirements AND empty jobPriorities still excludes all facts", () => {
+  const allStrengths = ["Факт A", "Факт B"];
+  const relevant = filterRelevantFacts(allStrengths, [], []);
+
+  assert.equal(relevant.length, 0, "no references means nothing is relevant");
 });

@@ -3,6 +3,12 @@ import { AiAnalysisError, INVALID_AI_JSON_MESSAGE } from "@/lib/ai-errors";
 import { type AiRouterContext, callAiRouter, logAiCallError, logAiCallSuccess } from "@/lib/ai-router";
 import { chooseModelForRole, providerPresets } from "@/lib/ai-presets";
 import { extractJsonFromAiResponse } from "@/lib/extract-json";
+import {
+  validateCoverLetterText,
+  hasCriticalWarnings,
+  warningToForbiddenFragment,
+  type CoverLetterWarning
+} from "@/lib/cover-letter-validator";
 
 const resumeMatchBasisSchema = z.object({
   matched_requirements: z.array(z.string()).default([]),
@@ -370,6 +376,59 @@ ${JSON.stringify(params.vacancy, null, 2)}`
   };
 }
 
+/**
+ * Checks whether a candidate strength is relevant to a vacancy by prefix-matching
+ * its significant words against matched requirements and job priorities.
+ * Uses 5-char prefix matching to handle Russian inflection
+ * (e.g. "договорную" and "договорной" share prefix "догов").
+ */
+function isStrengthRelevant(strength: string, referenceTexts: string[]): boolean {
+  const strengthWords = strength.toLowerCase().split(/\s+/).filter((w) => w.length > 4);
+  return referenceTexts.some((ref) => {
+    const refWords = ref.toLowerCase().split(/\s+/).filter((w) => w.length > 4);
+    return strengthWords.some((sw) =>
+      refWords.some((rw) => rw.startsWith(sw.slice(0, 5)) || sw.startsWith(rw.slice(0, 5)))
+    );
+  });
+}
+
+function buildWriterSystemPrompt(options: {
+  salaryInstruction: string;
+  forbiddenInstruction: string;
+  weakMatchWarning: string;
+}): string {
+  return (
+    'Ты пишешь короткое сопроводительное письмо на русском языке.\n' +
+    'Формат — строго 2–3 абзаца, не более 5 предложений суммарно.\n' +
+    '\n' +
+    'Структура:\n' +
+    '1. «Здравствуйте.»\n' +
+    '2. «Рассматриваю вашу вакансию «{vacancy_title}». По описанию вижу акцент на {2–4 конкретные задачи из job_priorities}.»\n' +
+    '3. «У меня есть релевантный опыт по {2–4 факта из relevant_candidate_facts, прямо соответствующие задачам}.»\n' +
+    '4. «Готов обсудить задачи, условия и формат работы.»\n' +
+    '\n' +
+    'Жёсткие правила (нарушение недопустимо):\n' +
+    '- Используй ТОЛЬКО факты из relevant_candidate_facts. НЕ добавляй факты из резюме напрямую — резюме предоставлено только для проверки деталей.\n' +
+    '- НЕ упоминай факты из excluded_facts — они нерелевантны для этой вакансии.\n' +
+    '- Не перечисляй более 3–4 направлений опыта. Не добавляй блок «также есть опыт…» если он не связан с job_priorities.\n' +
+    '- Не используй unsupported_requirements и не утверждай опыт из avoid_claims.\n' +
+    '- Не упоминай прошлых работодателей и названия компаний.\n' +
+    '- Не обещай удалёнку, офис, гибрид, командировки — только «готов обсудить условия и формат работы».\n' +
+    '- Судебные споры, иски, претензионная работа, досудебное урегулирование — ТОЛЬКО если job_priorities содержат суды / претензии / споры / взыскание.\n' +
+    '- Корпоративное сопровождение — ТОЛЬКО если job_priorities содержат корпоративные процедуры / ЛНА / корп. имущество / регистрацию юрлиц.\n' +
+    '- Руководство командой/отделом, KPI, управление людьми — ТОЛЬКО если vacancy_title или job_priorities содержат руководящую функцию (руководитель / начальник / директор / тимлид).\n' +
+    '- Взаимодействие с госорганами — ТОЛЬКО если job_priorities упоминают госорганы / регуляторов / выписки / справки / лицензии.\n' +
+    '- Не писать «сейчас я руковожу...»; если руководство релевантно — «есть опыт руководства [функцией]».\n' +
+    '- Запрещены слова «уникальный», «идеальный», «выдающийся», «лучший», самопиар.\n' +
+    '- Не придумывай опыт — только факты из relevant_candidate_facts и confirmedFacts.\n' +
+    '- Тон: деловой, спокойный, человечный, без штампов. Без длинных списков.' +
+    (options.weakMatchWarning ? '\n' + options.weakMatchWarning : '') +
+    options.salaryInstruction +
+    options.forbiddenInstruction +
+    '\nВерни строгий JSON: {"cover_letter":"..."}.'
+  );
+}
+
 export async function generateCoverLetterWithAi(params: {
   resumeText: string;
   confirmedFacts?: string | null;
@@ -380,7 +439,15 @@ export async function generateCoverLetterWithAi(params: {
   salaryExpectationsRequested?: boolean;
   salaryExpectationPreferredText?: string | null;
   overrideSalaryText?: string | null;
-}) {
+  /** Fragments to explicitly forbid in this generation attempt (passed by auto-regen or UI action). */
+  forbiddenFragments?: string[];
+}): Promise<{
+  coverLetter: string;
+  meta: unknown;
+  warnings: CoverLetterWarning[];
+  autoRegenerated: boolean;
+  firstAttemptWarnings?: CoverLetterWarning[];
+}> {
   const resumeFacts = [
     params.resumeText.slice(0, 2500),
     params.confirmedFacts ? `Подтверждённые пользователем факты:\n${params.confirmedFacts}` : ""
@@ -393,34 +460,19 @@ export async function generateCoverLetterWithAi(params: {
   const coverLetterFocus = params.analysis.recommended_cover_letter_focus;
 
   // Filter candidate_strengths: keep only facts that are directly linked to what
-  // the vacancy actually requires (job_priorities or recommended_cover_letter_focus).
-  // Facts that do not appear in matched_requirements are excluded to avoid inserting
-  // generic achievements that are irrelevant to the specific vacancy.
+  // the vacancy actually requires (matched_requirements OR job_priorities).
   const allStrengths = params.analysis.cover_letter_brief.candidate_strengths;
-  const relevantCandidateFacts = allStrengths.filter((strength) => {
-    const strengthWords = strength.toLowerCase().split(/\s+/).filter((w) => w.length > 4);
-    // Keep if the strength meaningfully overlaps with any matched requirement.
-    // Uses 5-char prefix matching to handle Russian inflection
-    // (e.g. "договорную" and "договорной" share prefix "догов").
-    return matchedRequirements.some((req) => {
-      const reqWords = req.toLowerCase().split(/\s+/).filter((w) => w.length > 4);
-      return strengthWords.some((sw) =>
-        reqWords.some(
-          (rw) =>
-            rw.startsWith(sw.slice(0, 5)) || sw.startsWith(rw.slice(0, 5))
-        )
-      );
-    });
-  });
+  const relevantCandidateFacts = allStrengths.filter((strength) =>
+    isStrengthRelevant(strength, [...matchedRequirements, ...jobPriorities])
+  );
 
-  // Facts not included in relevantCandidateFacts go to excludedFacts so the writer
-  // explicitly knows not to mention them.
+  // Facts not included go to excludedFacts so the writer explicitly knows not to mention them.
   const excludedFacts = allStrengths.filter((s) => !relevantCandidateFacts.includes(s));
 
   const brief = {
     vacancy_title: params.vacancy.title,
+    vacancy_key_tasks: jobPriorities,
     relevant_candidate_facts: relevantCandidateFacts,
-    job_priorities: jobPriorities,
     matched_requirements: matchedRequirements,
     red_flags: params.analysis.red_flags,
     avoid_claims: params.analysis.avoid_claims,
@@ -451,7 +503,43 @@ export async function generateCoverLetterWithAi(params: {
     }
   }
 
-  const parsed = await parseRouterJson({
+  const weakMatchWarning =
+    relevantCandidateFacts.length === 0
+      ? "- ВАЖНО: у кандидата нет чётко совпадающих фактов с задачами вакансии. Напиши короткое осторожное письмо без натяжки нерелевантного опыта."
+      : "";
+
+  // Build forbidden fragment instruction (from caller or inner auto-regen)
+  function buildForbiddenInstruction(fragments: string[]): string {
+    if (!fragments.length) return "";
+    return `\n\nПредыдущее письмо содержало нерелевантные фрагменты. НЕ используй: ${fragments.join("; ")}.`;
+  }
+
+  // Build validation context from params for the validator
+  const validationCtx = {
+    vacancyTitle: params.vacancy.title,
+    vacancyKeyTasks: [
+      ...jobPriorities,
+      ...(Array.isArray(coverLetterFocus) ? coverLetterFocus : coverLetterFocus ? [coverLetterFocus] : [])
+    ],
+    matchedRequirements,
+    salaryExpectationsRequested: salaryRequested,
+    salaryPreferredText: salaryText
+  };
+
+  const userMessage = {
+    role: "user" as const,
+    content: `Напиши сопроводительное письмо.
+
+Данные вакансии и анализа:
+${JSON.stringify(brief, null, 2)}
+
+Факты из резюме кандидата:
+${resumeFacts}`
+  };
+
+  // ─── First attempt ────────────────────────────────────────────────────────
+  const forbiddenInstruction1 = buildForbiddenInstruction(params.forbiddenFragments ?? []);
+  const parsed1 = await parseRouterJson({
     role: "writer",
     taskType: "cover_letter",
     schema: z.object({ cover_letter: z.string().min(1) }),
@@ -460,41 +548,58 @@ export async function generateCoverLetterWithAi(params: {
     messages: [
       {
         role: "system",
-        content:
-          'Ты пишешь короткое сопроводительное письмо на русском языке (3–5 предложений).\n' +
-          'Структура: приветствие → «Рассматриваю вашу вакансию [title]» → 2–3 ключевые задачи из вакансии → 2–3 факта из резюме кандидата, подтверждённых данными → «Готов обсудить задачи, условия и формат работы».\n' +
-          'Правила:\n' +
-          '- Используй только relevant_candidate_facts и matched_requirements — факты, прямо связанные с задачами вакансии.\n' +
-          '- НЕ упоминай факты из excluded_facts — они нерелевантны для этой вакансии.\n' +
-          '- Не используй unsupported_requirements и не утверждай опыт из avoid_claims.\n' +
-          '- Не упоминай прошлых работодателей и названия компаний — пиши только о задачах и опыте.\n' +
-          '- Не обещай удалёнку, офис, гибрид, командировки или конкретный график — пиши только «готов обсудить условия и формат работы».\n' +
-          '- KPI, сокращение сроков согласования договоров — упоминай только если вакансия управленческая или про договорный поток.\n' +
-          '- Досудебное урегулирование, претензионная работа — только для претензионно-судебных позиций.\n' +
-          '- Руководство командой/отделом — только если вакансия руководящая или явно требует управление людьми.\n' +
-          '- Не писать «сейчас я руковожу...»; если руководство релевантно — «есть опыт руководства [функцией]».\n' +
-          '- Не используй пафос: запрещены слова «уникальный», «идеальный», «выдающийся», «лучший», самопиар.\n' +
-          '- Не придумывай опыт — только факты из резюме и confirmedFacts.\n' +
-          '- Тон: деловой, спокойный, человечный, без штампов.' +
-          salaryInstruction +
-          '\nВерни строгий JSON: {"cover_letter":"..."}.'
+        content: buildWriterSystemPrompt({ salaryInstruction, forbiddenInstruction: forbiddenInstruction1, weakMatchWarning })
       },
-      {
-        role: "user",
-        content: `Напиши сопроводительное письмо.
-
-Данные вакансии и анализа:
-${JSON.stringify(brief, null, 2)}
-
-Факты из резюме кандидата:
-${resumeFacts}`
-      }
+      userMessage
     ]
   });
 
+  const firstText = parsed1.value.cover_letter;
+  const firstWarnings = validateCoverLetterText(firstText, validationCtx);
+
+  // ─── Auto-regeneration on critical warnings ────────────────────────────────
+  if (hasCriticalWarnings(firstWarnings)) {
+    const criticalFragments = firstWarnings
+      .filter((w) => w.level === "critical")
+      .map(warningToForbiddenFragment);
+
+    const forbiddenInstruction2 = buildForbiddenInstruction([
+      ...(params.forbiddenFragments ?? []),
+      ...criticalFragments
+    ]);
+
+    const parsed2 = await parseRouterJson({
+      role: "writer",
+      taskType: "cover_letter",
+      schema: z.object({ cover_letter: z.string().min(1) }),
+      temperatures: [0.1, 0.05],
+      context: params.context,
+      messages: [
+        {
+          role: "system",
+          content: buildWriterSystemPrompt({ salaryInstruction, forbiddenInstruction: forbiddenInstruction2, weakMatchWarning })
+        },
+        userMessage
+      ]
+    });
+
+    const secondText = parsed2.value.cover_letter;
+    const secondWarnings = validateCoverLetterText(secondText, validationCtx);
+
+    return {
+      coverLetter: secondText,
+      meta: parsed2.meta,
+      warnings: secondWarnings,
+      autoRegenerated: true,
+      firstAttemptWarnings: firstWarnings
+    };
+  }
+
   return {
-    coverLetter: parsed.value.cover_letter,
-    meta: parsed.meta
+    coverLetter: firstText,
+    meta: parsed1.meta,
+    warnings: firstWarnings,
+    autoRegenerated: false
   };
 }
 

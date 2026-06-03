@@ -29,17 +29,21 @@ const CONTRACT_PATTERNS =
 const LITIGATION_PATTERNS =
   /суд|претензи|иск|арбитраж|спор|взыскан|досудеб/i;
 
-function isManagerial(ctx: ValidationContext): boolean {
+// Patterns that indicate management language used in a letter
+const MANAGEMENT_IN_LETTER_PATTERNS =
+  /руководил\s+отдел|управлял\s+отдел|руководил\s+команд|управлял\s+команд|руководил\s+юридическ|руководство\s+отдел|управление\s+отдел|руководство\s+команд|возглавлял\s+отдел|возглавлял\s+команд/i;
+
+export function isManagerial(ctx: ValidationContext): boolean {
   const text = [ctx.vacancyTitle, ...(ctx.vacancyKeyTasks ?? [])].join(" ");
   return MANAGERIAL_PATTERNS.test(text);
 }
 
-function isContractFocused(ctx: ValidationContext): boolean {
+export function isContractFocused(ctx: ValidationContext): boolean {
   const text = [ctx.vacancyTitle, ...(ctx.vacancyKeyTasks ?? []), ...(ctx.matchedRequirements ?? [])].join(" ");
   return CONTRACT_PATTERNS.test(text);
 }
 
-function isLitigationFocused(ctx: ValidationContext): boolean {
+export function isLitigationFocused(ctx: ValidationContext): boolean {
   const text = [ctx.vacancyTitle, ...(ctx.vacancyKeyTasks ?? []), ...(ctx.matchedRequirements ?? [])].join(" ");
   return LITIGATION_PATTERNS.test(text);
 }
@@ -47,6 +51,10 @@ function isLitigationFocused(ctx: ValidationContext): boolean {
 /**
  * Validates a generated cover letter text and returns a list of warnings.
  * Pure function — no I/O, no Prisma.
+ *
+ * Levels:
+ *   critical — triggers automatic re-generation; shown with ⚠ in the UI
+ *   warn     — surfaced to the user but does not trigger auto-regeneration
  */
 export function validateCoverLetterText(
   text: string,
@@ -55,17 +63,17 @@ export function validateCoverLetterText(
   const warnings: CoverLetterWarning[] = [];
   const lower = text.toLowerCase();
 
-  // --- KPI mention ---
+  // --- KPI mention (critical: irrelevant metric for non-managerial role) ---
   if (/\bkpi\b/i.test(text) && !isManagerial(ctx)) {
     warnings.push({
       code: "irrelevant_kpi",
-      level: "warn",
+      level: "critical",
       message:
-        "Письмо содержит KPI, но вакансия не управленческая и не процессная. KPI лучше убрать или заменить на конкретный результат."
+        "Письмо содержит KPI, но вакансия не управленческая и не процессная. KPI нужно убрать или заменить на конкретный результат."
     });
   }
 
-  // --- Contract speed / timing ---
+  // --- Contract speed / timing (critical: not relevant unless vacancy is contract-flow) ---
   if (
     (lower.includes("сроки") || lower.includes("сократил")) &&
     (lower.includes("договор") || lower.includes("согласован")) &&
@@ -73,26 +81,36 @@ export function validateCoverLetterText(
   ) {
     warnings.push({
       code: "irrelevant_contract_speed",
-      level: "warn",
+      level: "critical",
       message:
-        "Письмо упоминает сокращение сроков согласования договоров, но вакансия не связана с договорным потоком. Лучше убрать или заменить на более релевантный факт."
+        "Письмо упоминает сокращение сроков согласования договоров, но вакансия не связана с договорным потоком. Нужно убрать или заменить на более релевантный факт."
     });
   }
 
-  // --- Pretrial / litigation stats ---
+  // --- Pretrial / litigation stats (critical: not relevant unless vacancy is litigation-focused) ---
   if (
     (lower.includes("досудеб") || lower.includes("претензи") || lower.includes("исков")) &&
     !isLitigationFocused(ctx)
   ) {
     warnings.push({
       code: "irrelevant_litigation",
-      level: "warn",
+      level: "critical",
       message:
-        "Письмо содержит факты о досудебном урегулировании, но вакансия не претензионно-судебная. Лучше убрать или заменить."
+        "Письмо содержит факты о досудебном урегулировании или претензиях, но вакансия не претензионно-судебная. Нужно убрать или заменить."
     });
   }
 
-  // --- "Сейчас я руковожу" framing ---
+  // --- General management mention (critical: misleads employer if role is not managerial) ---
+  if (MANAGEMENT_IN_LETTER_PATTERNS.test(text) && !isManagerial(ctx)) {
+    warnings.push({
+      code: "irrelevant_management",
+      level: "critical",
+      message:
+        "Письмо упоминает руководство отделом или командой, но вакансия не руководящая. Лучше убрать или переформулировать: «есть опыт работы в условиях …»."
+    });
+  }
+
+  // --- "Сейчас я руковожу" framing (critical: active leadership framing for non-managerial role) ---
   if (
     (lower.includes("сейчас я руковожу") || lower.includes("сейчас руковожу") || lower.includes("в настоящее время руковожу")) &&
     !isManagerial(ctx)
@@ -105,19 +123,17 @@ export function validateCoverLetterText(
     });
   }
 
-  // --- Employer / company names ---
-  // Heuristic: if a phrase like "в компании X" or "работая в X" appears, warn.
-  // Note: \b word boundaries don't work with Cyrillic in JS, use simple patterns.
+  // --- Employer / company names (critical: exposes unnecessary detail) ---
   if (/в компании|работая в|работал в|работаю в/i.test(text)) {
     warnings.push({
       code: "employer_name_mention",
-      level: "warn",
+      level: "critical",
       message:
-        "Письмо упоминает прошлого работодателя. Лучше писать об опыте и задачах, не называя компании."
+        "Письмо упоминает прошлого работодателя по названию или контексту. Лучше писать об опыте и задачах, не называя компании."
     });
   }
 
-  // --- Work format promises ---
+  // --- Work format promises (warn: unconfirmed commitment) ---
   if (/удалённ|удаленн|офисн|гибрид|командировк/i.test(text)) {
     warnings.push({
       code: "work_format_promise",
@@ -127,7 +143,7 @@ export function validateCoverLetterText(
     });
   }
 
-  // --- Letter too long ---
+  // --- Letter too long (warn: readability issue) ---
   if (text.length > 1200) {
     warnings.push({
       code: "too_long",
@@ -136,7 +152,7 @@ export function validateCoverLetterText(
     });
   }
 
-  // --- Missing salary phrase when requested ---
+  // --- Missing salary phrase when requested (warn: missed employer expectation) ---
   if (
     ctx.salaryExpectationsRequested &&
     ctx.salaryPreferredText &&
@@ -158,4 +174,21 @@ export function validateCoverLetterText(
 
 export function hasCriticalWarnings(warnings: CoverLetterWarning[]): boolean {
   return warnings.some((w) => w.level === "critical");
+}
+
+/**
+ * Maps a warning code to a short human-readable description of the forbidden fragment.
+ * Used when building forbiddenFragments for auto-regeneration or UI action.
+ */
+export function warningToForbiddenFragment(warning: CoverLetterWarning): string {
+  const map: Record<string, string> = {
+    irrelevant_kpi: "KPI и процессные метрики",
+    irrelevant_contract_speed: "сокращение сроков согласования договоров",
+    irrelevant_litigation: "досудебное урегулирование, претензии, судебные споры",
+    irrelevant_management: "руководство отделом, управление командой",
+    irrelevant_current_leadership: "фраза «сейчас я руковожу»",
+    employer_name_mention: "упоминания прошлых работодателей",
+    work_format_promise: "обещания формата работы (удалёнка, офис, гибрид)",
+  };
+  return map[warning.code] ?? warning.message;
 }

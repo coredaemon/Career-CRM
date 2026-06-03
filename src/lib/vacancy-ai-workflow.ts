@@ -123,6 +123,8 @@ export async function analyzeStoredVacancy(params: {
   let reviewerResult: unknown = null;
   let writerMeta: unknown = null;
   let coverLetterText: string | null = null;
+  let coverLetterAutoRegenerated = false;
+  let coverLetterWarningCodes: string[] = [];
   let reviewerUsed = false;
 
   if (mode === "letters_only") {
@@ -145,7 +147,7 @@ export async function analyzeStoredVacancy(params: {
     const stored = vacancyAnalysisSchema.parse(JSON.parse(vacancy.aiAnalysisJson));
     analysis = stored;
     await params.onLog?.("Создаём сопроводительное письмо.");
-    const { coverLetter, meta } = await generateCoverLetterWithAi({
+    const letterResult1 = await generateCoverLetterWithAi({
       resumeText: resume.originalText,
       confirmedFacts: resume.confirmedFacts,
       vacancy: {
@@ -158,8 +160,10 @@ export async function analyzeStoredVacancy(params: {
       salaryExpectationsRequested: analysis.salary_expectations_requested,
       salaryExpectationPreferredText: userSettings.salaryExpectationPreferredText
     });
-    coverLetterText = coverLetter;
-    writerMeta = meta;
+    coverLetterText = letterResult1.coverLetter;
+    writerMeta = letterResult1.meta;
+    coverLetterAutoRegenerated = letterResult1.autoRegenerated;
+    coverLetterWarningCodes = letterResult1.warnings.map((w) => w.code);
   } else if (analysisModeIncludesAnalysis(mode)) {
     const prepared = prepareVacancyTextForAi(vacancyPayload);
     if (!prepared.ok) {
@@ -258,7 +262,7 @@ export async function analyzeStoredVacancy(params: {
 
       if (shouldWrite) {
         await params.onLog?.("Создаём сопроводительное письмо.");
-        const { coverLetter, meta } = await generateCoverLetterWithAi({
+        const letterResult2 = await generateCoverLetterWithAi({
           resumeText: resume.originalText,
           confirmedFacts: resume.confirmedFacts,
           vacancy: {
@@ -271,8 +275,10 @@ export async function analyzeStoredVacancy(params: {
           salaryExpectationsRequested: analysis.salary_expectations_requested,
           salaryExpectationPreferredText: userSettings.salaryExpectationPreferredText
         });
-        coverLetterText = coverLetter;
-        writerMeta = meta;
+        coverLetterText = letterResult2.coverLetter;
+        writerMeta = letterResult2.meta;
+        coverLetterAutoRegenerated = letterResult2.autoRegenerated;
+        coverLetterWarningCodes = letterResult2.warnings.map((w) => w.code);
       }
     }
   } else {
@@ -359,12 +365,18 @@ export async function analyzeStoredVacancy(params: {
     }
 
     if (coverLetterText && letter) {
+      const autoRegenNote = coverLetterAutoRegenerated
+        ? " [авто-перегенерация: критичные warnings в первой попытке]"
+        : "";
+      const warningNote = coverLetterWarningCodes.length
+        ? ` Warnings: ${coverLetterWarningCodes.join(", ")}.`
+        : "";
       interactions.push({
         vacancyId: vacancy.id,
         companyId: vacancy.companyId,
         type: "cover_letter_created",
         occurredAt: new Date(),
-        summary: "Создано сопроводительное письмо."
+        summary: `Создано сопроводительное письмо.${autoRegenNote}${warningNote}`
       });
     }
 

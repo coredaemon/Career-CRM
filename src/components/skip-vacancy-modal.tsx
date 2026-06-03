@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui";
 
 export const SKIP_QUICK_REASONS = [
@@ -32,6 +32,14 @@ export function SkipVacancyModal({ vacancyId, vacancyTitle, onClose, onSkipped }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
   function toggleReason(reason: string) {
     setSelectedReasons((prev) =>
       prev.includes(reason) ? prev.filter((r) => r !== reason) : [...prev, reason]
@@ -59,42 +67,67 @@ export function SkipVacancyModal({ vacancyId, vacancyTitle, onClose, onSkipped }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-md rounded-xl border border-[var(--line)] bg-[var(--background)] p-6 shadow-xl">
-        <h2 className="text-lg font-semibold">Почему вакансия не подходит?</h2>
-        <p className="mt-1 line-clamp-1 text-sm text-[var(--muted)]">{vacancyTitle}</p>
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          {SKIP_QUICK_REASONS.map((reason) => (
-            <button
-              key={reason}
-              type="button"
-              onClick={() => toggleReason(reason)}
-              className={`focus-ring rounded-full border px-3 py-1 text-xs transition ${
-                selectedReasons.includes(reason)
-                  ? "border-[var(--accent)] bg-[var(--soft)] text-[var(--foreground)]"
-                  : "border-[var(--line)] text-[var(--muted)] hover:border-[var(--accent)]"
-              }`}
-            >
-              {reason}
-            </button>
-          ))}
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="flex w-full max-w-md flex-col rounded-xl border border-[var(--line)] bg-[var(--background)] shadow-xl"
+        style={{ maxHeight: "min(90vh, 640px)" }}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between p-6 pb-4">
+          <div className="min-w-0 pr-4">
+            <h2 className="text-lg font-semibold">Почему вакансия не подходит?</h2>
+            <p className="mt-1 line-clamp-1 text-sm text-[var(--muted)]">{vacancyTitle}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Закрыть"
+            className="flex-none rounded-md p-1 text-[var(--muted)] hover:bg-[var(--soft)] hover:text-[var(--foreground)]"
+          >
+            ✕
+          </button>
         </div>
 
-        <div className="mt-4">
-          <label className="block text-sm text-[var(--muted)]">Комментарий своими словами</label>
-          <textarea
-            className="mt-1 w-full rounded-md border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
-            rows={3}
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            placeholder="Необязательно..."
-          />
+        {/* Scrollable body */}
+        <div className="flex-1 overflow-y-auto px-6 pb-4">
+          <div className="flex flex-wrap gap-2">
+            {SKIP_QUICK_REASONS.map((reason) => (
+              <button
+                key={reason}
+                type="button"
+                onClick={() => toggleReason(reason)}
+                className={`focus-ring rounded-full border px-3 py-1 text-xs transition ${
+                  selectedReasons.includes(reason)
+                    ? "border-[var(--accent)] bg-[var(--soft)] text-[var(--foreground)]"
+                    : "border-[var(--line)] text-[var(--muted)] hover:border-[var(--accent)]"
+                }`}
+              >
+                {reason}
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-4">
+            <label className="block text-sm text-[var(--muted)]">Комментарий своими словами</label>
+            <textarea
+              className="mt-1 w-full rounded-md border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
+              rows={3}
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              placeholder="Необязательно..."
+            />
+          </div>
+
+          {error ? <p className="mt-3 text-sm text-red-500">{error}</p> : null}
         </div>
 
-        {error ? <p className="mt-3 text-sm text-red-500">{error}</p> : null}
-
-        <div className="mt-5 flex flex-wrap gap-3">
+        {/* Sticky footer */}
+        <div className="flex flex-wrap gap-3 border-t border-[var(--line)] p-4">
           <Button onClick={() => submit(true)} disabled={busy}>
             {busy ? "Сохраняем..." : "Сохранить и скрыть"}
           </Button>

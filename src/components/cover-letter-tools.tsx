@@ -3,14 +3,44 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui";
-import { validateCoverLetterText, type CoverLetterWarning, type ValidationContext } from "@/lib/cover-letter-validator";
+import {
+  validateCoverLetterText,
+  warningToForbiddenFragment,
+  isManagerial,
+  isContractFocused,
+  isLitigationFocused,
+  type CoverLetterWarning,
+  type ValidationContext
+} from "@/lib/cover-letter-validator";
 
-const styleOptions: { label: string; instruction: string }[] = [
+type StyleOption = {
+  label: string;
+  instruction: string;
+  /**
+   * Optional guard: returns true when the accent is relevant for the vacancy.
+   * If the guard returns false a soft warning is shown and the neutral style is used.
+   */
+  isRelevant?: (ctx: ValidationContext) => boolean;
+};
+
+const styleOptions: StyleOption[] = [
   { label: "Спокойное (базовое)", instruction: "спокойный деловой стиль, без пафоса" },
   { label: "Короткое", instruction: "3–4 предложения, максимально коротко" },
-  { label: "Акцент на судебную работу", instruction: "больше акцент на судебную работу" },
-  { label: "Акцент на договорную работу", instruction: "больше акцент на договорную работу" },
-  { label: "Акцент на управление", instruction: "больше акцент на управление" }
+  {
+    label: "Акцент на судебную работу",
+    instruction: "больше акцент на судебную работу",
+    isRelevant: (ctx) => isLitigationFocused(ctx)
+  },
+  {
+    label: "Акцент на договорную работу",
+    instruction: "больше акцент на договорную работу",
+    isRelevant: (ctx) => isContractFocused(ctx)
+  },
+  {
+    label: "Акцент на управление",
+    instruction: "больше акцент на управление",
+    isRelevant: (ctx) => isManagerial(ctx)
+  }
 ];
 
 export function CoverLetterTools({
@@ -32,33 +62,54 @@ export function CoverLetterTools({
   const [editText, setEditText] = useState(currentText ?? "");
   const [editDirty, setEditDirty] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
+  const [warningsHidden, setWarningsHidden] = useState(false);
+
   const warnings = useMemo<CoverLetterWarning[]>(
     () => (editText ? validateCoverLetterText(editText, validationContext) : []),
     [editText, validationContext]
   );
 
-  async function regenerate(instruction: string) {
+  async function regenerate(instruction: string, forbiddenFragments?: string[]) {
     if (!resumeId) {
       setMessage("Для перегенерации нужно резюме, связанное с письмом.");
       return;
     }
     setBusy(instruction);
     setMessage("");
+    setWarningsHidden(false);
     const response = await fetch(`/api/vacancies/${vacancyId}/cover-letter`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ resumeId, instruction })
+      body: JSON.stringify({ resumeId, instruction, ...(forbiddenFragments?.length ? { forbiddenFragments } : {}) })
     });
     const data = await response.json();
     setBusy("");
     if (response.ok) {
-      setMessage("Новое письмо создано.");
+      const autoNote = data.autoRegenerated ? " (письмо было авто-перегенерировано по критичным предупреждениям)" : "";
+      setMessage(`Новое письмо создано.${autoNote}`);
       setEditText(data.coverLetter?.text ?? "");
       setEditDirty(false);
       router.refresh();
     } else {
       setMessage(data.message ?? "Не удалось перегенерировать.");
     }
+  }
+
+  function handleAccentClick(option: StyleOption) {
+    const ctx = validationContext ?? {};
+    if (option.isRelevant && !option.isRelevant(ctx)) {
+      setMessage(
+        `Выбранный акцент «${option.label}» слабо связан с этой вакансией. Письмо сохранено в нейтральном стиле.`
+      );
+      void regenerate("спокойный деловой стиль, без пафоса");
+      return;
+    }
+    void regenerate(option.instruction);
+  }
+
+  function handleRegenerateWithoutFragments() {
+    const fragments = warnings.map(warningToForbiddenFragment);
+    void regenerate("спокойный деловой стиль, без пафоса", fragments);
   }
 
   async function saveEdits() {
@@ -83,7 +134,10 @@ export function CoverLetterTools({
   function handleTextChange(value: string) {
     setEditText(value);
     setEditDirty(value !== (currentText ?? ""));
+    setWarningsHidden(false);
   }
+
+  const hasCritical = warnings.some((w) => w.level === "critical");
 
   return (
     <div className="grid gap-4">
@@ -127,37 +181,59 @@ export function CoverLetterTools({
         </div>
       ) : null}
 
-      {warnings.length > 0 ? (
-        <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 dark:bg-amber-950/30">
-          <div className="mb-2 text-sm font-medium text-amber-800 dark:text-amber-200">
-            Письмо может содержать нерелевантные или нежелательные фрагменты:
+      {!warningsHidden && warnings.length > 0 ? (
+        <div className={`rounded-lg border p-4 ${hasCritical ? "border-red-300 bg-red-50 dark:bg-red-950/30" : "border-amber-300 bg-amber-50 dark:bg-amber-950/30"}`}>
+          <div className={`mb-2 text-sm font-medium ${hasCritical ? "text-red-800 dark:text-red-200" : "text-amber-800 dark:text-amber-200"}`}>
+            {hasCritical
+              ? "Письмо содержит критичные нерелевантные фрагменты:"
+              : "Письмо может содержать нерелевантные или нежелательные фрагменты:"}
           </div>
           <ul className="grid gap-1.5">
             {warnings.map((w) => (
-              <li key={w.code} className="flex items-start gap-2 text-sm text-amber-800 dark:text-amber-200">
+              <li
+                key={w.code}
+                className={`flex items-start gap-2 text-sm ${hasCritical ? "text-red-800 dark:text-red-200" : "text-amber-800 dark:text-amber-200"}`}
+              >
                 <span className="mt-0.5 flex-none">{w.level === "critical" ? "⚠" : "•"}</span>
                 <span>{w.message}</span>
               </li>
             ))}
           </ul>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleRegenerateWithoutFragments}
+              disabled={disabled || Boolean(busy)}
+              className="rounded-md border border-[var(--line)] bg-white px-3 py-1.5 text-xs font-medium hover:bg-[var(--soft)] disabled:opacity-50 dark:bg-transparent"
+            >
+              {busy ? "Генерируем..." : "Перегенерировать без этих фрагментов"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setWarningsHidden(true)}
+              className="rounded-md border border-[var(--line)] px-3 py-1.5 text-xs text-[var(--muted)] hover:bg-[var(--soft)]"
+            >
+              Скрыть предупреждение
+            </button>
+          </div>
         </div>
       ) : null}
 
       <div>
         <p className="mb-2 text-xs font-medium text-[var(--muted)]">Перегенерировать в стиле:</p>
         <div className="flex flex-wrap gap-2">
-          {styleOptions.map(({ label, instruction }) => (
+          {styleOptions.map((option) => (
             <Button
-              key={instruction}
+              key={option.instruction}
               variant="secondary"
-              onClick={() => regenerate(instruction)}
+              onClick={() => handleAccentClick(option)}
               disabled={disabled || Boolean(busy)}
             >
-              {busy === instruction ? "Готовим..." : label}
+              {busy === option.instruction ? "Готовим..." : option.label}
             </Button>
           ))}
           <Button
-            onClick={() => regenerate("спокойный деловой стиль, без пафоса")}
+            onClick={() => void regenerate("спокойный деловой стиль, без пафоса")}
             disabled={disabled || Boolean(busy)}
           >
             {busy === "спокойный деловой стиль, без пафоса" && !styleOptions.some((o) => o.instruction === busy)

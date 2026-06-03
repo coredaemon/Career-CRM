@@ -11,6 +11,8 @@ const MANAGERIAL_PATTERNS =
   /руковод|управлен|менеджер|директор|начальник|team\s*lead|тимлид|head\s+of|нач\.\s+отдел/i;
 const CONTRACT_PATTERNS = /договор|контракт|согласован|оформлен|сделк/i;
 const LITIGATION_PATTERNS = /суд|претензи|иск|арбитраж|спор|взыскан|досудеб/i;
+const MANAGEMENT_IN_LETTER_PATTERNS =
+  /руководил\s+отдел|управлял\s+отдел|руководил\s+команд|управлял\s+команд|руководил\s+юридическ|руководство\s+отдел|управление\s+отдел|руководство\s+команд|возглавлял\s+отдел|возглавлял\s+команд/i;
 
 function isManagerial(ctx) {
   const text = [ctx.vacancyTitle, ...(ctx.vacancyKeyTasks ?? [])].join(" ");
@@ -30,20 +32,23 @@ function validateCoverLetterText(text, ctx = {}) {
   const lower = text.toLowerCase();
 
   if (/\bkpi\b/i.test(text) && !isManagerial(ctx)) {
-    warnings.push({ code: "irrelevant_kpi", level: "warn" });
+    warnings.push({ code: "irrelevant_kpi", level: "critical" });
   }
   if (
     (lower.includes("сроки") || lower.includes("сократил")) &&
     (lower.includes("договор") || lower.includes("согласован")) &&
     !isContractFocused(ctx)
   ) {
-    warnings.push({ code: "irrelevant_contract_speed", level: "warn" });
+    warnings.push({ code: "irrelevant_contract_speed", level: "critical" });
   }
   if (
     (lower.includes("досудеб") || lower.includes("претензи") || lower.includes("исков")) &&
     !isLitigationFocused(ctx)
   ) {
-    warnings.push({ code: "irrelevant_litigation", level: "warn" });
+    warnings.push({ code: "irrelevant_litigation", level: "critical" });
+  }
+  if (MANAGEMENT_IN_LETTER_PATTERNS.test(text) && !isManagerial(ctx)) {
+    warnings.push({ code: "irrelevant_management", level: "critical" });
   }
   if (
     (lower.includes("сейчас я руковожу") || lower.includes("сейчас руковожу")) &&
@@ -52,7 +57,7 @@ function validateCoverLetterText(text, ctx = {}) {
     warnings.push({ code: "irrelevant_current_leadership", level: "critical" });
   }
   if (/в компании|работая в|работал в|работаю в/i.test(text)) {
-    warnings.push({ code: "employer_name_mention", level: "warn" });
+    warnings.push({ code: "employer_name_mention", level: "critical" });
   }
   if (/удалённ|удаленн|офисн|гибрид|командировк/i.test(text)) {
     warnings.push({ code: "work_format_promise", level: "warn" });
@@ -73,12 +78,18 @@ function validateCoverLetterText(text, ctx = {}) {
   return warnings;
 }
 
+function hasCriticalWarnings(warnings) {
+  return warnings.some((w) => w.level === "critical");
+}
+
 // ---
 
-test("warns on KPI in non-managerial vacancy", () => {
+test("warns on KPI in non-managerial vacancy — level is critical", () => {
   const text = "Рассматриваю вашу вакансию юриста. Внедрял KPI и процессные метрики.";
   const warnings = validateCoverLetterText(text, { vacancyTitle: "Юрист" });
-  assert.ok(warnings.some((w) => w.code === "irrelevant_kpi"), "should warn about KPI");
+  const kpiWarning = warnings.find((w) => w.code === "irrelevant_kpi");
+  assert.ok(kpiWarning, "should warn about KPI");
+  assert.equal(kpiWarning.level, "critical", "KPI warning should be critical");
 });
 
 test("no KPI warning for managerial vacancy", () => {
@@ -102,10 +113,12 @@ test("no contract speed warning for contract-focused vacancy", () => {
   assert.ok(!warnings.some((w) => w.code === "irrelevant_contract_speed"), "should not warn for contract vacancy");
 });
 
-test("warns on employer name mention", () => {
+test("warns on employer name mention — level is critical", () => {
   const text = "Работал в компании Рога и Копыта три года.";
   const warnings = validateCoverLetterText(text);
-  assert.ok(warnings.some((w) => w.code === "employer_name_mention"), "should warn about employer name");
+  const w = warnings.find((w) => w.code === "employer_name_mention");
+  assert.ok(w, "should warn about employer name");
+  assert.equal(w.level, "critical", "employer mention should be critical");
 });
 
 test("warns on work format promise", () => {
@@ -158,4 +171,42 @@ test("no missing salary warning when salary present in text", () => {
     salaryPreferredText: "от 150 тыс. ₽"
   });
   assert.ok(!warnings.some((w) => w.code === "missing_salary"), "should not warn when salary present");
+});
+
+test("irrelevant_management fires critical when letter mentions руководил отделом for non-managerial vacancy", () => {
+  const text = "Здравствуйте. Рассматриваю вашу вакансию юрисконсульта. Руководил отделом договорной работы три года.";
+  const warnings = validateCoverLetterText(text, { vacancyTitle: "Юрисконсульт" });
+  const w = warnings.find((w) => w.code === "irrelevant_management");
+  assert.ok(w, "should warn about management mention");
+  assert.equal(w.level, "critical", "management mention should be critical");
+});
+
+test("no irrelevant_management warning for managerial vacancy", () => {
+  const text = "Здравствуйте. Рассматриваю вашу вакансию руководителя. Руководил командой юридического подразделения.";
+  const warnings = validateCoverLetterText(text, { vacancyTitle: "Руководитель юридического отдела" });
+  assert.ok(!warnings.some((w) => w.code === "irrelevant_management"), "should not warn for managerial vacancy");
+});
+
+test("irrelevant_litigation fires critical for non-litigation vacancy", () => {
+  const text = "Здравствуйте. Рассматриваю вашу вакансию. Вёл досудебное урегулирование споров.";
+  const warnings = validateCoverLetterText(text, { vacancyTitle: "Корпоративный юрист" });
+  const w = warnings.find((w) => w.code === "irrelevant_litigation");
+  assert.ok(w, "should warn about litigation");
+  assert.equal(w.level, "critical", "litigation warning should be critical");
+});
+
+test("hasCriticalWarnings returns true when any critical warning present", () => {
+  const warnings = [
+    { code: "work_format_promise", level: "warn" },
+    { code: "irrelevant_kpi", level: "critical" }
+  ];
+  assert.ok(hasCriticalWarnings(warnings), "should detect critical warning");
+});
+
+test("hasCriticalWarnings returns false when only warn-level warnings present", () => {
+  const warnings = [
+    { code: "work_format_promise", level: "warn" },
+    { code: "too_long", level: "warn" }
+  ];
+  assert.ok(!hasCriticalWarnings(warnings), "should not flag as critical when no critical warnings");
 });
