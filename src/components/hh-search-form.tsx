@@ -13,16 +13,40 @@ type ProfileOption = {
   searchQueries: string[];
 };
 
-type SearchResult = {
-  totals?: {
-    found: number;
-    created: number;
-    duplicates: number;
-    analyzed: number;
-    errors: number;
-  };
-  stoppedByCaptcha?: boolean;
+type ProgressState = {
+  foundLinks: number;
+  collectedCards: number;
+  created: number;
+  duplicates: number;
+  analysisQueued: number;
+  analyzed: number;
+  errors: number;
+  recommended: number;
+  needsReview: number;
+  skippedByAi: number;
+};
+
+const emptyProgress: ProgressState = {
+  foundLinks: 0,
+  collectedCards: 0,
+  created: 0,
+  duplicates: 0,
+  analysisQueued: 0,
+  analyzed: 0,
+  errors: 0,
+  recommended: 0,
+  needsReview: 0,
+  skippedByAi: 0
+};
+
+type SearchEvent = {
+  type: string;
+  runId?: string;
+  message?: string;
+  stage?: string;
+  progress?: ProgressState;
   errors?: string[];
+  stoppedByCaptcha?: boolean;
 };
 
 export function HhSearchForm({ profiles }: { profiles: ProfileOption[] }) {
@@ -39,8 +63,14 @@ export function HhSearchForm({ profiles }: { profiles: ProfileOption[] }) {
   const [onlyWithSalary, setOnlyWithSalary] = useState(false);
   const [analyzeAfterCollect, setAnalyzeAfterCollect] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [runId, setRunId] = useState("");
+  const [stage, setStage] = useState("ожидает запуска");
   const [message, setMessage] = useState("");
-  const [result, setResult] = useState<SearchResult | null>(null);
+  const [progress, setProgress] = useState<ProgressState>(emptyProgress);
+  const [log, setLog] = useState<string[]>([]);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [done, setDone] = useState(false);
+  const [stoppedByCaptcha, setStoppedByCaptcha] = useState(false);
 
   function changeProfile(id: string) {
     setProfileId(id);
@@ -59,8 +89,14 @@ export function HhSearchForm({ profiles }: { profiles: ProfileOption[] }) {
   async function startSearch() {
     if (!selectedProfile) return;
     setBusy(true);
-    setMessage("Открываем браузер и запускаем поиск. Если hh попросит войти, сделайте это вручную в открывшемся окне.");
-    setResult(null);
+    setDone(false);
+    setRunId("");
+    setStage("подготовка браузера");
+    setMessage("Открываем браузер...");
+    setProgress(emptyProgress);
+    setLog(["Открываем браузер..."]);
+    setErrors([]);
+    setStoppedByCaptcha(false);
 
     const response = await fetch("/api/search/hh", {
       method: "POST",
@@ -77,11 +113,60 @@ export function HhSearchForm({ profiles }: { profiles: ProfileOption[] }) {
         analyzeAfterCollect
       })
     });
-    const data = await response.json();
+
+    if (!response.body) {
+      setBusy(false);
+      setMessage("Не удалось получить поток прогресса.");
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { value, done: streamDone } = await reader.read();
+      if (streamDone) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        handleEvent(JSON.parse(line) as SearchEvent);
+      }
+    }
+
     setBusy(false);
-    setResult(data);
-    setMessage(response.ok ? "Поиск завершён." : data.message || "Поиск остановлен с ошибкой.");
   }
+
+  function handleEvent(event: SearchEvent) {
+    if (event.runId) setRunId(event.runId);
+    if (event.stage) setStage(stageLabel(event.stage));
+    if (event.message) {
+      setMessage(event.message);
+      setLog((current) => [...current.slice(-80), event.message || ""]);
+    }
+    if (event.progress) setProgress(event.progress);
+    if (event.errors) setErrors(event.errors);
+    if (event.stoppedByCaptcha) setStoppedByCaptcha(true);
+    if (event.type === "done") {
+      setDone(true);
+      setStage("завершено");
+    }
+    if (event.type === "error") {
+      setStage("ошибка");
+      setDone(true);
+    }
+  }
+
+  async function stopSearch() {
+    if (!runId) return;
+    await fetch(`/api/search/runs/${runId}/stop`, { method: "POST" });
+    setLog((current) => [...current, "Запрошена остановка поиска. CareerOS остановится между шагами."]);
+  }
+
+  const collectPercent = Math.min(100, Math.round((progress.collectedCards / Math.max(progress.foundLinks || totalLimit, 1)) * 100));
+  const aiPercent = progress.analysisQueued ? Math.min(100, Math.round((progress.analyzed / progress.analysisQueued) * 100)) : 0;
 
   return (
     <div className="grid gap-6">
@@ -128,7 +213,7 @@ export function HhSearchForm({ profiles }: { profiles: ProfileOption[] }) {
       <Card className="grid gap-4">
         <h2 className="text-xl font-semibold tracking-normal">Параметры поиска</h2>
         <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Регион / город" hint="Можно указать город словами или area id hh, если знаете его.">
+          <Field label="Регион / город">
             <input className={inputClass} value={region} onChange={(event) => setRegion(event.target.value)} placeholder="Москва, Санкт-Петербург или 1" />
           </Field>
           <Field label="Только новые за период">
@@ -155,48 +240,81 @@ export function HhSearchForm({ profiles }: { profiles: ProfileOption[] }) {
           <input type="checkbox" checked={analyzeAfterCollect} onChange={(event) => setAnalyzeAfterCollect(event.target.checked)} />
           Проанализировать новые вакансии AI после сбора
         </label>
-        {totalLimit > 50 ? (
-          <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
-            Лимит больше 50 может выглядеть для hh как агрессивный сбор. Лучше запускать небольшие партии.
-          </p>
-        ) : null}
       </Card>
 
       <Card className="grid gap-4">
-        <h2 className="text-xl font-semibold tracking-normal">Запуск</h2>
-        <p className="text-sm leading-6 text-[var(--muted)]">
-          CareerOS откроет обычный браузер Playwright с локальным профилем. Логин в hh, капчи и любые подтверждения выполняются только вручную пользователем.
-        </p>
-        <Button onClick={startSearch} disabled={busy || !selectedProfile || queries.length === 0}>
-          {busy ? "Поиск выполняется..." : "Запустить поиск"}
-        </Button>
-        {message ? <p className="rounded-md border border-[var(--line)] bg-[var(--soft)] p-3 text-sm">{message}</p> : null}
+        <h2 className="text-xl font-semibold tracking-normal">Запуск и прогресс</h2>
+        <div className="rounded-md border border-[var(--line)] bg-[var(--soft)] p-4">
+          <div className="text-sm text-[var(--muted)]">Текущий этап</div>
+          <div className="mt-1 text-lg font-semibold">{stage}</div>
+          <p className="mt-2 text-sm text-[var(--muted)]">{message || "Готово к запуску."}</p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Metric label="Ссылок найдено" value={progress.foundLinks} />
+          <Metric label="Карточек собрано" value={progress.collectedCards} />
+          <Metric label="Новых вакансий" value={progress.created} />
+          <Metric label="Дублей" value={progress.duplicates} />
+          <Metric label="Отправлено в AI" value={progress.analysisQueued} />
+          <Metric label="AI завершил" value={progress.analyzed} />
+          <Metric label="Рекомендовано" value={progress.recommended} />
+          <Metric label="Ошибок" value={progress.errors} />
+        </div>
+        <ProgressBar label="Прогресс сбора" value={collectPercent} />
+        {analyzeAfterCollect ? <ProgressBar label="Прогресс AI-анализа" value={aiPercent} /> : null}
+        <div className="flex flex-wrap gap-3">
+          <Button onClick={startSearch} disabled={busy || !selectedProfile || queries.length === 0}>
+            {busy ? "Поиск выполняется..." : "Запустить поиск"}
+          </Button>
+          {busy && runId ? (
+            <Button variant="secondary" onClick={stopSearch}>
+              Остановить поиск
+            </Button>
+          ) : null}
+        </div>
+        <div className="max-h-72 overflow-auto rounded-md border border-[var(--line)] bg-black/5 p-3 text-sm leading-6 dark:bg-white/5">
+          {log.length === 0 ? (
+            <p className="text-[var(--muted)]">Лог появится после запуска.</p>
+          ) : (
+            log.map((item, index) => <div key={`${item}-${index}`}>{item}</div>)
+          )}
+        </div>
       </Card>
 
-      {result?.totals ? (
+      {done ? (
         <Card>
-          <h2 className="text-xl font-semibold tracking-normal">Результат</h2>
+          <h2 className="text-2xl font-semibold tracking-normal">{stage === "ошибка" ? "Поиск завершился с ошибкой" : "Поиск завершён"}</h2>
           <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <Metric label="Найдено ссылок" value={result.totals.found} />
-            <Metric label="Новых" value={result.totals.created} />
-            <Metric label="Дублей" value={result.totals.duplicates} />
-            <Metric label="AI-анализ" value={result.totals.analyzed} />
-            <Metric label="Ошибок" value={result.totals.errors} />
+            <Metric label="Найдено ссылок" value={progress.foundLinks} />
+            <Metric label="Новых" value={progress.created} />
+            <Metric label="Дублей" value={progress.duplicates} />
+            <Metric label="AI-анализ" value={progress.analyzed} />
+            <Metric label="Ошибок" value={progress.errors} />
+            <Metric label="Рекомендовано" value={progress.recommended} />
+            <Metric label="На проверке" value={progress.needsReview} />
+            <Metric label="Пропущено AI" value={progress.skippedByAi} />
           </div>
-          {result.stoppedByCaptcha ? <p className="mt-4 text-sm text-amber-700">Сбор остановлен: hh показал защитную страницу или капчу.</p> : null}
+          {stoppedByCaptcha ? <p className="mt-4 text-sm text-amber-700">hh показал капчу или защитную страницу. Сбор остановлен безопасно.</p> : null}
           <div className="mt-5 flex flex-wrap gap-3">
             <Link href="/vacancies" className="rounded-md border border-[var(--line)] px-4 py-2 text-sm hover:bg-[var(--soft)]">
-              Открыть найденные вакансии
+              Открыть все найденные
             </Link>
             <Link href="/vacancies/recommended" className="rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white dark:text-black">
-              Перейти к рекомендованным
+              Открыть рекомендованные
             </Link>
+            <Link href="/vacancies?status=no_ai" className="rounded-md border border-[var(--line)] px-4 py-2 text-sm hover:bg-[var(--soft)]">
+              Проанализировать непроанализированные
+            </Link>
+            {runId ? (
+              <Link href={`/search/runs/${runId}`} className="rounded-md border border-[var(--line)] px-4 py-2 text-sm hover:bg-[var(--soft)]">
+                Детали запуска
+              </Link>
+            ) : null}
           </div>
-          {result.errors?.length ? (
+          {errors.length ? (
             <details className="mt-5">
               <summary className="cursor-pointer text-sm font-medium">Посмотреть ошибки</summary>
               <ul className="mt-3 grid gap-2 text-sm text-[var(--muted)]">
-                {result.errors.map((error) => (
+                {errors.map((error) => (
                   <li key={error}>{error}</li>
                 ))}
               </ul>
@@ -215,4 +333,36 @@ function Metric({ label, value }: { label: string; value: number }) {
       <div className="mt-2 text-2xl font-semibold tracking-normal">{value}</div>
     </div>
   );
+}
+
+function ProgressBar({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <div className="mb-2 flex justify-between text-sm">
+        <span>{label}</span>
+        <span>{value}%</span>
+      </div>
+      <div className="h-2 rounded-full bg-[var(--soft)]">
+        <div className="h-2 rounded-full bg-[var(--accent)] transition-all" style={{ width: `${value}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function stageLabel(stage: string) {
+  const labels: Record<string, string> = {
+    preparing: "подготовка браузера",
+    preparing_browser: "подготовка браузера",
+    opening_hh: "открываем hh",
+    manual_login: "ждём ручной вход",
+    query: "выполняем запрос",
+    links: "собираем ссылки",
+    card: "открываем карточку вакансии",
+    saving: "сохраняем вакансии",
+    analyzing_ai: "анализируем AI",
+    completed: "завершено",
+    stopped: "остановлено",
+    error: "ошибка"
+  };
+  return labels[stage] || stage;
 }

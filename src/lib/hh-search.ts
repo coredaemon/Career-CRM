@@ -9,7 +9,16 @@ export type HhSearchParams = {
   onlyWithSalary?: boolean;
   searchPeriodDays?: number | null;
   workFormat?: string | null;
+  onProgress?: (event: HhProgressEvent) => Promise<void> | void;
+  shouldStop?: () => Promise<boolean> | boolean;
 };
+
+export type HhProgressEvent =
+  | { type: "stage"; stage: string; message: string }
+  | { type: "query"; query: string; queryIndex: number; totalQueries: number; message: string }
+  | { type: "links"; foundLinks: number; message: string }
+  | { type: "card"; sourceUrl: string; cardIndex: number; totalCards: number; title?: string; message: string }
+  | { type: "error"; message: string };
 
 export type HhVacancyDraft = {
   title: string;
@@ -24,6 +33,7 @@ export type HhVacancyDraft = {
   employerUrl?: string | null;
   isArchived?: boolean | null;
   testRequired?: boolean | null;
+  extractionWarning?: string | null;
 };
 
 export type HhSearchResult = {
@@ -31,6 +41,7 @@ export type HhSearchResult = {
   vacancies: HhVacancyDraft[];
   errors: string[];
   stoppedByCaptcha: boolean;
+  stoppedByUser: boolean;
 };
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -41,27 +52,59 @@ export async function collectHhVacancies(params: HhSearchParams): Promise<HhSear
   const vacancies: HhVacancyDraft[] = [];
   const errors: string[] = [];
   let stoppedByCaptcha = false;
+  let stoppedByUser = false;
+
+  const emit = async (event: HhProgressEvent) => {
+    await params.onProgress?.(event);
+  };
+  const shouldStop = async () => {
+    const stopped = Boolean(await params.shouldStop?.());
+    if (stopped) {
+      stoppedByUser = true;
+      await emit({ type: "stage", stage: "stopped", message: "Остановка запрошена пользователем." });
+    }
+    return stopped;
+  };
 
   try {
+    await emit({ type: "stage", stage: "preparing_browser", message: "Открываем браузер..." });
     context = await chromium.launchPersistentContext(path.join(process.cwd(), "browser-profile"), {
       headless: false,
       viewport: { width: 1280, height: 900 }
     });
     const page = context.pages()[0] || (await context.newPage());
 
-    for (const query of params.queries) {
-      if (foundLinks.length >= params.totalLimit || stoppedByCaptcha) break;
+    await emit({ type: "stage", stage: "opening_hh", message: "Открываем hh. Если нужен вход, выполните его вручную в браузере." });
+
+    for (const [index, query] of params.queries.entries()) {
+      if (foundLinks.length >= params.totalLimit || stoppedByCaptcha || (await shouldStop())) break;
+
+      await emit({
+        type: "query",
+        query,
+        queryIndex: index + 1,
+        totalQueries: params.queries.length,
+        message: `Запрос ${index + 1} из ${params.queries.length}: ${query}`
+      });
 
       const searchUrl = buildSearchUrl(query, params);
       await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-      await delay(1500);
+      await delay(1800);
+
+      if (await isLoginHint(page)) {
+        await emit({ type: "stage", stage: "manual_login", message: "hh может требовать ручной вход. Даю время войти в открытом браузере." });
+        await delay(10000);
+      }
 
       if (await isCaptchaPage(page)) {
         stoppedByCaptcha = true;
-        errors.push("hh показал капчу или защитную страницу. Сбор остановлен, продолжите позже вручную.");
+        const message = "hh показал капчу или защитную страницу. Сбор остановлен, продолжите позже вручную.";
+        errors.push(message);
+        await emit({ type: "error", message });
         break;
       }
 
+      await emit({ type: "stage", stage: "collecting_links", message: "Собираем ссылки на вакансии..." });
       const links = await page.$$eval("a[href*='/vacancy/']", (anchors) =>
         Array.from(new Set(anchors.map((anchor) => (anchor as HTMLAnchorElement).href.split("?")[0]).filter(Boolean)))
       );
@@ -76,32 +119,55 @@ export async function collectHhVacancies(params: HhSearchParams): Promise<HhSear
         if (addedForQuery >= params.limitPerQuery) break;
       }
 
+      await emit({ type: "links", foundLinks: foundLinks.length, message: `Найдено ссылок: ${foundLinks.length}` });
       await delay(1200);
     }
 
-    for (const link of foundLinks.slice(0, params.totalLimit)) {
-      if (vacancies.length >= params.totalLimit || stoppedByCaptcha) break;
-      try {
-        await page.goto(link, { waitUntil: "domcontentloaded", timeout: 60000 });
-        await delay(1200);
+    const linksToOpen = foundLinks.slice(0, params.totalLimit);
+    for (const [index, link] of linksToOpen.entries()) {
+      if (vacancies.length >= params.totalLimit || stoppedByCaptcha || (await shouldStop())) break;
+      await emit({
+        type: "card",
+        sourceUrl: link,
+        cardIndex: index + 1,
+        totalCards: linksToOpen.length,
+        message: `Открываем карточку ${index + 1} из ${linksToOpen.length}`
+      });
 
+      try {
+        const vacancy = await openVacancyWithRetry(page, link);
         if (await isCaptchaPage(page)) {
           stoppedByCaptcha = true;
-          errors.push("hh показал капчу при открытии вакансии. Сбор остановлен.");
+          const message = "hh показал капчу при открытии вакансии. Сбор остановлен.";
+          errors.push(message);
+          await emit({ type: "error", message });
           break;
         }
-
-        vacancies.push(await extractVacancy(page, link));
-        await delay(1600);
+        vacancies.push(vacancy);
+        await emit({
+          type: "card",
+          sourceUrl: link,
+          cardIndex: index + 1,
+          totalCards: linksToOpen.length,
+          title: vacancy.title,
+          message: `Карточка собрана: ${vacancy.title}`
+        });
+        await delay(1500);
       } catch (error) {
-        errors.push(`${link}: ${error instanceof Error ? error.message : "не удалось открыть вакансию"}`);
+        const message = `${link}: ${error instanceof Error ? error.message : "не удалось открыть вакансию"}`;
+        errors.push(message);
+        await emit({ type: "error", message });
       }
     }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Браузерный поиск остановлен с ошибкой.";
+    errors.push(message);
+    await emit({ type: "error", message });
   } finally {
     await context?.close().catch(() => undefined);
   }
 
-  return { foundLinks, vacancies, errors, stoppedByCaptcha };
+  return { foundLinks, vacancies, errors, stoppedByCaptcha, stoppedByUser };
 }
 
 function buildSearchUrl(query: string, params: HhSearchParams) {
@@ -116,17 +182,35 @@ function buildSearchUrl(query: string, params: HhSearchParams) {
   return url.toString();
 }
 
+async function openVacancyWithRetry(page: Page, link: string) {
+  try {
+    await page.goto(link, { waitUntil: "domcontentloaded", timeout: 45000 });
+    await delay(1200);
+    return await extractVacancy(page, link);
+  } catch {
+    await delay(1500);
+    await page.goto(link, { waitUntil: "domcontentloaded", timeout: 45000 });
+    await delay(1200);
+    return extractVacancy(page, link);
+  }
+}
+
 async function isCaptchaPage(page: Page) {
   const text = (await page.locator("body").innerText({ timeout: 5000 }).catch(() => "")).toLowerCase();
   return text.includes("captcha") || text.includes("капча") || text.includes("подтвердите") || text.includes("проверка безопасности");
 }
 
+async function isLoginHint(page: Page) {
+  const text = (await page.locator("body").innerText({ timeout: 5000 }).catch(() => "")).toLowerCase();
+  return text.includes("войдите") || text.includes("войти") || text.includes("логин");
+}
+
 async function extractVacancy(page: Page, sourceUrl: string): Promise<HhVacancyDraft> {
   const bodyText = await page.locator("body").innerText({ timeout: 15000 }).catch(() => "");
   const title = (await firstText(page, ["h1", "[data-qa='vacancy-title']"])) || "Вакансия hh";
-  const companyName = await firstText(page, ["[data-qa='vacancy-company-name']", "[data-qa='bloko-header-2']", "a[href*='/employer/']"]);
+  const companyName = await firstText(page, ["[data-qa='vacancy-company-name']", "a[href*='/employer/']"]);
   const salaryText = await firstText(page, ["[data-qa='vacancy-salary']", ".vacancy-title .bloko-header-section-2"]);
-  const location = await firstText(page, ["[data-qa='vacancy-view-location']", "[data-qa='vacancy-view-raw-address']", "[data-qa='vacancy-view-location'] span"]);
+  const locationRaw = await firstText(page, ["[data-qa='vacancy-view-location']", "[data-qa='vacancy-view-raw-address']", "[data-qa='vacancy-view-location'] span"]);
   const employerUrl = await page.locator("a[href*='/employer/']").first().getAttribute("href").catch(() => null);
   const description =
     (await page.locator("[data-qa='vacancy-description']").innerText({ timeout: 5000 }).catch(() => "")) ||
@@ -135,6 +219,9 @@ async function extractVacancy(page: Page, sourceUrl: string): Promise<HhVacancyD
   const publishedAtText = await firstText(page, ["[data-qa='vacancy-creation-time']", ".vacancy-creation-time"]);
   const isArchived = /вакансия в архиве|архивная вакансия/i.test(bodyText);
   const testRequired = /тестов|тестовое|тестирование|пройти тест/i.test(bodyText);
+  const rawDescription = clean(description);
+  const extractionWarning =
+    !rawDescription || rawDescription.length < 300 ? "Не удалось извлечь полный текст вакансии. Проверьте карточку вручную." : null;
 
   return {
     title: clean(title) || "Вакансия hh",
@@ -142,13 +229,14 @@ async function extractVacancy(page: Page, sourceUrl: string): Promise<HhVacancyD
     sourceUrl,
     sourceVacancyId: sourceUrl.match(/vacancy\/(\d+)/)?.[1] || null,
     salaryText: clean(salaryText),
-    location: clean(location),
+    location: shortenLocation(clean(locationRaw)),
     workFormat,
-    rawDescription: clean(description),
+    rawDescription,
     publishedAtText: clean(publishedAtText),
     employerUrl: employerUrl ? new URL(employerUrl, "https://hh.ru").toString() : null,
     isArchived,
-    testRequired
+    testRequired,
+    extractionWarning
   };
 }
 
@@ -163,6 +251,11 @@ async function firstText(page: Page, selectors: string[]) {
 function clean(value?: string | null) {
   const trimmed = value?.replace(/\s+/g, " ").trim();
   return trimmed || null;
+}
+
+function shortenLocation(value: string | null) {
+  if (!value) return null;
+  return value.length > 180 ? `${value.slice(0, 177)}...` : value;
 }
 
 function inferWorkFormat(text: string) {

@@ -13,6 +13,7 @@ CareerOS does not send applications automatically, does not store hh login/passw
 - Add confirmed facts that AI is allowed to use in cover letters.
 - Analyze the resume and create a search profile.
 - Run a browser-based hh vacancy search from the search profile.
+- Watch live progress in the app: current query, collected links, saved vacancies, duplicates, AI analysis, errors, and run log.
 - Save collected vacancies in the local CRM.
 - Analyze new vacancies with AI using the configured analysis/writer providers.
 - Open recommended vacancies, copy cover letters, and apply manually on hh.
@@ -66,6 +67,39 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
+
+## Vacancy Search
+
+1. Open `Поиск вакансий`.
+2. Choose a search profile.
+3. Enable the generated search queries or add your own queries.
+4. Set conservative limits, for example 10 vacancies per query and 50 per run.
+5. Start the search and watch the live log in the app.
+6. If hh asks for login, complete it manually in the opened browser.
+7. If hh shows captcha or a protection page, CareerOS stops the run and records the reason.
+
+After the run finishes, use:
+
+- `Открыть все найденные` to review collected vacancies.
+- `Проанализировать непроанализированные` if AI was off or failed.
+- `Открыть рекомендованные` to start manual applications.
+- `Детали запуска` to inspect log, errors, duplicates, and saved vacancies.
+
+If the search found nothing, try broader queries, a different region, or a smaller set of filters.
+
+If AI analysis did not run, check `Настройки AI`, then use `Проанализировать непроанализированные` on the vacancies page. CareerOS keeps the vacancy even when AI fails and marks it for review.
+
+## Manual Applications
+
+CareerOS never sends applications automatically. The practical flow is:
+
+1. Open `Рекомендованные`.
+2. Open the vacancy on hh.
+3. Copy the generated cover letter.
+4. Send the application manually on hh.
+5. Click `Отклик отправлен` in CareerOS.
+
+CareerOS will create an application record and schedule `проверить ответ` in 5 days.
 
 ## Scripts
 

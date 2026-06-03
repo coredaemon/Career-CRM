@@ -1,17 +1,19 @@
 import { prisma } from "@/lib/prisma";
 import { getUserSettings } from "@/lib/settings";
+import { BulkAiAnalyzeButton } from "@/components/bulk-ai-analyze-button";
 import { Card, LinkButton, PageHeader } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   const settings = await getUserSettings();
-  const [resumes, profiles, vacancies, aiRecommended, readyToApply, applied, companies, applications, needResponseCheck, overdueActions, todayActions] =
+  const [resumes, profiles, vacancies, withoutAi, aiRecommended, readyToApply, applied, companies, applications, needResponseCheck, overdueActions, todayActions] =
     await Promise.all([
       prisma.resume.count(),
       prisma.searchProfile.count(),
       prisma.vacancy.count(),
-      prisma.vacancy.count({ where: { status: "ai_recommended" } }),
+      prisma.vacancy.count({ where: { OR: [{ matchScore: null }, { aiAnalysisJson: null }] } }),
+      prisma.vacancy.count({ where: { OR: [{ status: "ai_recommended" }, { status: "ready_to_apply" }] } }),
       prisma.vacancy.count({ where: { status: "ready_to_apply" } }),
       prisma.vacancy.count({ where: { status: "applied" } }),
       prisma.company.count(),
@@ -55,6 +57,7 @@ export default async function DashboardPage() {
     ["Резюме", resumes],
     ["Профили поиска", profiles],
     ["Вакансии", vacancies],
+    ["Без AI-анализа", withoutAi],
     ["Рекомендованные", aiRecommended],
     ["Готовы к отклику", readyToApply],
     ["Отклики отправлены", applied],
@@ -77,9 +80,10 @@ export default async function DashboardPage() {
 
       <Card className="mt-6">
         <h2 className="text-xl font-semibold tracking-normal">Следующие шаги</h2>
-        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{nextStepText({ vacancies, aiRecommended, readyToApply })}</p>
+        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{nextStepText({ vacancies, withoutAi, aiRecommended, readyToApply })}</p>
         <div className="mt-5 flex flex-wrap gap-3">
           {vacancies === 0 ? <LinkButton href="/search">Запустить поиск вакансий</LinkButton> : null}
+          {withoutAi > 0 ? <BulkAiAnalyzeButton label="Проанализировать вакансии" /> : null}
           {aiRecommended > 0 ? <LinkButton href="/vacancies/recommended">Перейти к рекомендованным</LinkButton> : null}
           {readyToApply > 0 ? <LinkButton href="/vacancies?status=ready_to_apply">Вакансии для отклика</LinkButton> : null}
           <LinkButton href="/vacancies/new">Добавить вручную</LinkButton>
@@ -94,8 +98,9 @@ export default async function DashboardPage() {
   );
 }
 
-function nextStepText({ vacancies, aiRecommended, readyToApply }: { vacancies: number; aiRecommended: number; readyToApply: number }) {
+function nextStepText({ vacancies, withoutAi, aiRecommended, readyToApply }: { vacancies: number; withoutAi: number; aiRecommended: number; readyToApply: number }) {
   if (vacancies === 0) return "Запустите поиск вакансий по профилю. CareerOS откроет hh в браузере, соберёт карточки и сможет прогнать новые вакансии через AI.";
+  if (withoutAi > 0) return "Есть собранные вакансии без AI-анализа. Запустите анализ, чтобы получить рекомендации и письма.";
   if (readyToApply > 0) return "Есть вакансии, куда можно откликнуться прямо сейчас: откройте hh, скопируйте письмо и отправьте отклик вручную.";
   if (aiRecommended > 0) return "AI нашёл подходящие вакансии. Проверьте рекомендованные и решите, какие перевести в готовые к отклику.";
   return "Продолжайте разбор найденных вакансий или запустите новый поиск небольшими партиями.";
