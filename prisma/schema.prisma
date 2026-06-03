@@ -1,0 +1,168 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum ResumeSourceType {
+  text
+  file
+}
+
+enum SearchProfileStatus {
+  draft
+  active
+  archived
+}
+
+enum LearningObservationStatus {
+  draft
+  proposed
+  accepted
+  rejected
+}
+
+model UserSettings {
+  id                  String   @id @default(cuid())
+  aiProvider          String?
+  aiBaseUrl           String?
+  aiPrimaryModel      String?
+  aiFastModel         String?
+  aiConfigured        Boolean  @default(false)
+  onboardingCompleted Boolean  @default(false)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model Resume {
+  id             String          @id @default(cuid())
+  title          String
+  sourceType     ResumeSourceType
+  originalText   String
+  aiSummary      String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  applications   Application[]
+  coverLetters   CoverLetter[]
+  searchProfiles SearchProfile[]
+}
+
+model SearchProfile {
+  id                  String              @id @default(cuid())
+  resumeId            String
+  title               String
+  summary             String
+  targetRolesJson     String
+  searchQueriesJson   String
+  positiveSignalsJson String
+  negativeSignalsJson String
+  stopWordsJson       String
+  status              SearchProfileStatus @default(draft)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  resume              Resume              @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  vacancies           Vacancy[]
+}
+
+model Vacancy {
+  id              String         @id @default(cuid())
+  searchProfileId String?
+  companyId       String?
+  title           String
+  source          String
+  sourceUrl       String?
+  salaryText      String?
+  location        String?
+  workFormat      String?
+  rawDescription  String?
+  status          String
+  matchScore      Int?
+  employerScore   Int?
+  finalScore      Int?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  applications    Application[]
+  company         Company?       @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  coverLetters    CoverLetter[]
+  interactions    Interaction[]
+  searchProfile   SearchProfile? @relation(fields: [searchProfileId], references: [id], onDelete: SetNull)
+}
+
+model Company {
+  id            String        @id @default(cuid())
+  name          String
+  brandName     String?
+  inn           String?
+  ogrn          String?
+  website       String?
+  employerScore Int?
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  interactions  Interaction[]
+  vacancies     Vacancy[]
+}
+
+model Application {
+  id            String        @id @default(cuid())
+  vacancyId     String
+  resumeId      String?
+  coverLetterId String?
+  status        String
+  appliedAt     DateTime?
+  responseAt    DateTime?
+  nextActionAt  DateTime?
+  outcome       String?
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  coverLetter   CoverLetter?  @relation(fields: [coverLetterId], references: [id], onDelete: SetNull)
+  interactions  Interaction[]
+  resume        Resume?       @relation(fields: [resumeId], references: [id], onDelete: SetNull)
+  vacancy       Vacancy       @relation(fields: [vacancyId], references: [id], onDelete: Cascade)
+}
+
+model CoverLetter {
+  id           String        @id @default(cuid())
+  vacancyId    String
+  resumeId     String
+  text         String
+  style        String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  applications Application[]
+  resume       Resume        @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  vacancy      Vacancy       @relation(fields: [vacancyId], references: [id], onDelete: Cascade)
+}
+
+model Interaction {
+  id            String       @id @default(cuid())
+  applicationId String?
+  companyId     String?
+  vacancyId     String?
+  type          String
+  occurredAt    DateTime
+  summary       String
+  rawText       String?
+  aiSummary     String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  application   Application? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  company       Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  vacancy       Vacancy?     @relation(fields: [vacancyId], references: [id], onDelete: SetNull)
+}
+
+model LearningObservation {
+  id            String                    @id @default(cuid())
+  sourceType    String
+  sourceId      String?
+  description   String
+  evidenceJson  String
+  suggestedRule String?
+  status        LearningObservationStatus @default(draft)
+  createdAt     DateTime                  @default(now())
+  updatedAt     DateTime                  @updatedAt
+}
