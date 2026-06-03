@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CopyButton } from "@/components/copy-button";
 import { CoverLetterTools } from "@/components/cover-letter-tools";
+import { VacancyAiErrorPanel } from "@/components/vacancy-ai-error-panel";
 import { VacancyAiRetryButton } from "@/components/vacancy-ai-retry-button";
 import { VacancyQuickActions } from "@/components/vacancy-quick-actions";
 import { VacancyStatusSelect } from "@/components/vacancy-status-select";
@@ -62,6 +63,14 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
       />
       <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
         <div className="grid gap-6">
+          {vacancy.status === "analysis_error" ? (
+            <VacancyAiErrorPanel
+              vacancyId={vacancy.id}
+              errorCode={vacancy.analysisErrorCode}
+              errorMessage={vacancy.analysisErrorMessage || vacancy.recommendation}
+              technicalDetails={vacancy.analysisErrorCode === "INVALID_AI_JSON" ? vacancy.recommendation || undefined : undefined}
+            />
+          ) : null}
           <Card>
             <h2 className="text-xl font-semibold tracking-normal">Обзор</h2>
             <div className="mt-4 grid gap-3 text-sm text-[var(--muted)] sm:grid-cols-2">

@@ -1,3 +1,4 @@
+import { sanitizeAiErrorMessage } from "@/lib/ai-errors";
 import { prisma } from "@/lib/prisma";
 import { getUserSettings } from "@/lib/settings";
 import { AiTaskRole, providerPreset } from "@/lib/ai-presets";
@@ -127,6 +128,7 @@ export async function callAiRouter(request: AiRouterRequest): Promise<AiRouterRe
 
     return { content, provider: route.provider, model: route.model, role: request.role, usage };
   } catch (error) {
+    const message = sanitizeAiErrorMessage(error instanceof Error ? error.message : "Неизвестная ошибка AI");
     await prisma.aiCallLog.create({
       data: {
         taskType: request.taskType,
@@ -134,11 +136,33 @@ export async function callAiRouter(request: AiRouterRequest): Promise<AiRouterRe
         model: route.model,
         role: request.role,
         status: "error",
-        errorMessage: error instanceof Error ? error.message.slice(0, 1000) : "Неизвестная ошибка AI"
+        errorCode: error instanceof Error && "code" in error ? String((error as { code?: string }).code) : undefined,
+        errorMessage: message
       }
     });
-    throw error;
+    throw error instanceof Error ? new Error(message) : error;
   }
+}
+
+export async function logAiCallError(params: {
+  taskType: string;
+  provider: string;
+  model: string;
+  role: AiTaskRole;
+  errorCode: string;
+  errorMessage: string;
+}) {
+  await prisma.aiCallLog.create({
+    data: {
+      taskType: params.taskType,
+      provider: params.provider,
+      model: params.model,
+      role: params.role,
+      status: "error",
+      errorCode: params.errorCode,
+      errorMessage: sanitizeAiErrorMessage(params.errorMessage)
+    }
+  });
 }
 
 export async function fetchProviderModels(baseUrl: string, apiKey: string) {

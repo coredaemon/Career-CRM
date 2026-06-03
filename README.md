@@ -89,6 +89,50 @@ If the search found nothing, try broader queries, a different region, or a small
 
 If AI analysis did not run, check `Настройки AI`, then use `Проанализировать непроанализированные` on the vacancies page. CareerOS keeps the vacancy even when AI fails and marks it for review.
 
+## Progress and Long-Running Tasks
+
+### How to tell that search is running
+
+- On `Поиск вакансий`, the progress panel shows the current stage, query number, counters, and a live log while the run is active.
+- The left menu indicator shows `Идёт поиск` when a search is running.
+- Open `Процессы` or `Детали запуска` (`/search/runs/[id]`) to see polling-based updates even if the browser stream was interrupted.
+
+### Bulk AI analysis progress
+
+- `Проанализировать непроанализированные` creates a `ProcessRun` and shows `N из M` with a link to `/processes/[id]`.
+- You can stop after the current vacancy from the bulk analyze button or the process detail page.
+
+### Stale or stuck processes
+
+If a run stays in `Выполняется` for more than 10 minutes without updates, CareerOS marks it as `Завис` on the next page load.
+
+Actions:
+
+- `Пометить как остановленный` on search history or run details.
+- `Повторить запуск` from the search page.
+- Open `Процессы` to review stale search and AI tasks.
+
+### Invalid AI JSON
+
+If the analyst model returns text instead of JSON, CareerOS retries up to 3 times, then saves the vacancy with `Ошибка анализа`.
+
+On the vacancy page you will see:
+
+- title: `AI не смог вернуть корректный анализ`
+- actions: `Повторить AI-анализ`, `Настройки AI`, `Оставить на ручную проверку`
+
+Writer and reviewer are not called when analysis JSON is invalid.
+
+### Recommended vacancies
+
+After successful analysis:
+
+- high-confidence `yes` → `Готово к отклику` (with cover letter)
+- strong match with `maybe` and score ≥ 75 → `AI рекомендует`
+- open `Рекомендованные` or the `Готово к отклику` tab
+
+Use `Пересчитать статистику` on run details if top counters and the vacancy list disagree.
+
 ## Manual Applications
 
 CareerOS never sends applications automatically. The practical flow is:

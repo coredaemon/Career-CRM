@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { SearchRunProgressPanel } from "@/components/search-run-progress-panel";
 import { Button, Card, Field, inputClass } from "@/components/ui";
 
 type ProfileOption = {
@@ -24,6 +25,8 @@ type ProgressState = {
   recommended: number;
   needsReview: number;
   skippedByAi: number;
+  coverLetters?: number;
+  analysisErrors?: number;
 };
 
 const emptyProgress: ProgressState = {
@@ -244,6 +247,7 @@ export function HhSearchForm({ profiles }: { profiles: ProfileOption[] }) {
 
       <Card className="grid gap-4">
         <h2 className="text-xl font-semibold tracking-normal">Запуск и прогресс</h2>
+        {runId && busy ? <SearchRunProgressPanel runId={runId} fallbackProgress={progress} onStop={stopSearch} /> : null}
         <div className="rounded-md border border-[var(--line)] bg-[var(--soft)] p-4">
           <div className="text-sm text-[var(--muted)]">Текущий этап</div>
           <div className="mt-1 text-lg font-semibold">{stage}</div>
@@ -300,6 +304,9 @@ export function HhSearchForm({ profiles }: { profiles: ProfileOption[] }) {
             </Link>
             <Link href="/vacancies/recommended" className="rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white dark:text-black">
               Открыть рекомендованные
+            </Link>
+            <Link href="/vacancies?status=ready_to_apply" className="rounded-md border border-[var(--line)] px-4 py-2 text-sm hover:bg-[var(--soft)]">
+              Готовые к отклику
             </Link>
             <Link href="/vacancies?status=no_ai" className="rounded-md border border-[var(--line)] px-4 py-2 text-sm hover:bg-[var(--soft)]">
               Проанализировать непроанализированные

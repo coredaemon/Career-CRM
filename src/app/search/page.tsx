@@ -1,12 +1,15 @@
-import Link from "next/link";
 import { HhSearchForm } from "@/components/hh-search-form";
+import { SearchHistorySidebar, type SearchRunHistoryItem } from "@/components/search-history-sidebar";
 import { Card, PageHeader } from "@/components/ui";
 import { fromJsonText } from "@/lib/json";
 import { prisma } from "@/lib/prisma";
+import { markStaleSearchRuns } from "@/lib/stale-process";
 
 export const dynamic = "force-dynamic";
 
 export default async function SearchPage() {
+  await markStaleSearchRuns();
+
   const [profiles, runs] = await Promise.all([
     prisma.searchProfile.findMany({
       orderBy: { createdAt: "desc" },
@@ -18,6 +21,23 @@ export default async function SearchPage() {
       include: { searchProfile: true }
     })
   ]);
+
+  const history: SearchRunHistoryItem[] = runs.map((run) => ({
+    id: run.id,
+    status: run.status,
+    profileTitle: run.searchProfile?.title || "Профиль удалён",
+    startedAt: run.startedAt.toISOString(),
+    finishedAt: run.finishedAt?.toISOString() ?? null,
+    queries: fromJsonText<string[]>(run.queriesJson, []),
+    totalFound: run.totalFound,
+    totalCreated: run.totalCreated,
+    totalDuplicates: run.totalDuplicates,
+    totalAnalyzed: run.totalAnalyzed,
+    totalErrors: run.totalErrors,
+    totalRecommended: run.totalRecommended,
+    totalAnalysisErrors: run.totalAnalysisErrors,
+    updatedAt: run.updatedAt.toISOString()
+  }));
 
   return (
     <>
@@ -39,43 +59,7 @@ export default async function SearchPage() {
         <aside className="grid content-start gap-4">
           <Card>
             <h2 className="text-lg font-semibold tracking-normal">История поиска</h2>
-            {runs.length === 0 ? (
-              <p className="mt-3 text-sm text-[var(--muted)]">Запусков пока нет.</p>
-            ) : (
-              <div className="mt-4 grid gap-3">
-                {runs.map((run) => {
-                  const queries = fromJsonText<string[]>(run.queriesJson, []);
-                  return (
-                    <div key={run.id} className="rounded-md border border-[var(--line)] p-3 text-sm">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="font-medium">{run.searchProfile?.title || "Профиль удалён"}</div>
-                        <span className="rounded-md bg-[var(--soft)] px-2 py-1 text-xs">{searchRunStatusLabel(run.status)}</span>
-                      </div>
-                      <div className="mt-1 text-xs text-[var(--muted)]">
-                        старт: {run.startedAt.toLocaleString("ru-RU")}
-                        {run.finishedAt ? ` · финиш: ${run.finishedAt.toLocaleString("ru-RU")}` : ""}
-                      </div>
-                      <div className="mt-2 text-xs text-[var(--muted)]">Запросы: {queries.slice(0, 2).join(", ") || "не указаны"}</div>
-                      <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-[var(--muted)]">
-                        <span>найдено: {run.totalFound}</span>
-                        <span>новых: {run.totalCreated}</span>
-                        <span>дублей: {run.totalDuplicates}</span>
-                        <span>AI: {run.totalAnalyzed}</span>
-                        <span>ошибок: {run.totalErrors}</span>
-                      </div>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <Link href={`/search/runs/${run.id}`} className="rounded-md border border-[var(--line)] px-3 py-1.5 text-xs hover:bg-[var(--soft)]">
-                          Открыть детали
-                        </Link>
-                        <Link href="/search" className="rounded-md border border-[var(--line)] px-3 py-1.5 text-xs hover:bg-[var(--soft)]">
-                          Повторить запуск
-                        </Link>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+            <SearchHistorySidebar runs={history} />
           </Card>
           <Card>
             <h2 className="text-lg font-semibold tracking-normal">Безопасный режим</h2>
@@ -87,14 +71,4 @@ export default async function SearchPage() {
       </div>
     </>
   );
-}
-
-function searchRunStatusLabel(status: string) {
-  const labels: Record<string, string> = {
-    running: "выполняется",
-    completed: "завершён",
-    error: "ошибка",
-    stopped: "остановлен"
-  };
-  return labels[status] || status;
 }

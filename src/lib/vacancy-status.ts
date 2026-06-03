@@ -39,3 +39,13 @@ export function statusFromAiDecision(decision: "yes" | "maybe" | "no"): VacancyS
   if (decision === "no") return "rejected_by_ai";
   return "needs_review";
 }
+
+export function statusFromAiAnalysis(params: {
+  shouldApply: "yes" | "maybe" | "no";
+  score: number;
+}): VacancyStatus {
+  if (params.shouldApply === "no") return "rejected_by_ai";
+  if (params.shouldApply === "yes") return "ready_to_apply";
+  if (params.score >= 75) return "ai_recommended";
+  return "needs_review";
+}

@@ -1,8 +1,21 @@
 import { analyzeVacancyWithAi, generateCoverLetterWithAi, reviewVacancyAnalysisWithAi, VacancyAnalysis } from "@/lib/ai";
+import { AiAnalysisError } from "@/lib/ai-errors";
 import { fromJsonText } from "@/lib/json";
 import { prisma } from "@/lib/prisma";
-import { statusFromAiDecision } from "@/lib/vacancy-status";
+import { statusFromAiAnalysis } from "@/lib/vacancy-status";
 import { vacancyAnalysisStorage } from "@/lib/vacancy-service";
+
+async function markVacancyAnalysisError(vacancyId: string, params: { code: string; message: string; technicalDetails?: string }) {
+  await prisma.vacancy.update({
+    where: { id: vacancyId },
+    data: {
+      status: "analysis_error",
+      analysisErrorCode: params.code,
+      analysisErrorMessage: params.message,
+      recommendation: params.message
+    }
+  });
+}
 
 export async function analyzeStoredVacancy(params: {
   vacancyId: string;
@@ -30,21 +43,42 @@ export async function analyzeStoredVacancy(params: {
     testRequired: vacancy.testRequired || undefined
   };
 
-  const { analysis: initialAnalysis, meta: analysisMeta } = await analyzeVacancyWithAi({
-    resumeText: resume.originalText,
-    searchProfile: profile
-      ? {
-          title: profile.title,
-          summary: profile.summary,
-          targetRoles: fromJsonText<string[]>(profile.targetRolesJson, []),
-          searchQueries: fromJsonText<string[]>(profile.searchQueriesJson, []),
-          positiveSignals: fromJsonText<string[]>(profile.positiveSignalsJson, []),
-          negativeSignals: fromJsonText<string[]>(profile.negativeSignalsJson, []),
-          stopWords: fromJsonText<string[]>(profile.stopWordsJson, [])
-        }
-      : null,
-    vacancy: vacancyPayload
-  });
+  let initialAnalysis: VacancyAnalysis;
+  let analysisMeta: { provider: string; model: string; role: string };
+
+  try {
+    const analyzed = await analyzeVacancyWithAi({
+      resumeText: resume.originalText,
+      searchProfile: profile
+        ? {
+            title: profile.title,
+            summary: profile.summary,
+            targetRoles: fromJsonText<string[]>(profile.targetRolesJson, []),
+            searchQueries: fromJsonText<string[]>(profile.searchQueriesJson, []),
+            positiveSignals: fromJsonText<string[]>(profile.positiveSignalsJson, []),
+            negativeSignals: fromJsonText<string[]>(profile.negativeSignalsJson, []),
+            stopWords: fromJsonText<string[]>(profile.stopWordsJson, [])
+          }
+        : null,
+      vacancy: vacancyPayload
+    });
+    initialAnalysis = analyzed.analysis;
+    analysisMeta = analyzed.meta;
+  } catch (error) {
+    if (error instanceof AiAnalysisError) {
+      await markVacancyAnalysisError(vacancy.id, {
+        code: error.code,
+        message: error.userMessage,
+        technicalDetails: error.technicalDetails
+      });
+      throw error;
+    }
+    await markVacancyAnalysisError(vacancy.id, {
+      code: "AI_ANALYSIS_FAILED",
+      message: error instanceof Error ? error.message : "AI-анализ не удался."
+    });
+    throw error;
+  }
 
   let analysis: VacancyAnalysis = initialAnalysis;
   let reviewerMeta: unknown = null;
@@ -76,13 +110,18 @@ export async function analyzeStoredVacancy(params: {
     analysis
   });
 
-  const status = statusFromAiDecision(analysis.should_apply);
+  const status = statusFromAiAnalysis({
+    shouldApply: analysis.should_apply,
+    score: analysis.vacancy_match_score
+  });
 
   const updated = await prisma.$transaction(async (tx) => {
     const updatedVacancy = await tx.vacancy.update({
       where: { id: vacancy.id },
       data: {
         status,
+        analysisErrorCode: null,
+        analysisErrorMessage: null,
         ...vacancyAnalysisStorage(analysis),
         aiMetaJson: JSON.stringify({
           analysis: analysisMeta,

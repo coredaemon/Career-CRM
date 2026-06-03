@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { ProcessIndicator } from "@/components/process-indicator";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,6 +14,7 @@ const nav = [
   { href: "/resumes", label: "Резюме" },
   { href: "/profiles", label: "Профили поиска" },
   { href: "/search", label: "Поиск вакансий" },
+  { href: "/processes", label: "Процессы" },
   { href: "/vacancies", label: "Вакансии" },
   { href: "/vacancies/recommended", label: "Рекомендованные" },
   { href: "/companies", label: "Компании" },
@@ -42,6 +44,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
                 </Link>
               ))}
             </nav>
+            <ProcessIndicator />
           </aside>
           <main className="px-5 py-6 sm:px-8 lg:px-10">{children}</main>
         </div>

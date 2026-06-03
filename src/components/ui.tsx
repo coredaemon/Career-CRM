@@ -65,11 +65,20 @@ export function LinkButton({ href, children }: { href: string; children: React.R
   );
 }
 
-export function EmptyState({ title, description }: { title: string; description: string }) {
+export function EmptyState({
+  title,
+  description,
+  actions
+}: {
+  title: string;
+  description: string;
+  actions?: React.ReactNode;
+}) {
   return (
     <Card className="flex min-h-56 flex-col justify-center">
       <h2 className="text-xl font-semibold tracking-normal">{title}</h2>
       <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted)]">{description}</p>
+      {actions}
     </Card>
   );
 }

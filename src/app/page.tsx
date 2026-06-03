@@ -1,12 +1,16 @@
+import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { getActiveProcessesSummary } from "@/lib/active-processes";
 import { getUserSettings } from "@/lib/settings";
 import { BulkAiAnalyzeButton } from "@/components/bulk-ai-analyze-button";
 import { Card, LinkButton, PageHeader } from "@/components/ui";
+import { searchRunStatusLabel } from "@/lib/process-status";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   const settings = await getUserSettings();
+  const activeProcesses = await getActiveProcessesSummary();
   const [resumes, profiles, vacancies, withoutAi, aiRecommended, readyToApply, applied, companies, applications, needResponseCheck, overdueActions, todayActions] =
     await Promise.all([
       prisma.resume.count(),
@@ -14,7 +18,9 @@ export default async function DashboardPage() {
       prisma.vacancy.count(),
       prisma.vacancy.count({ where: { OR: [{ matchScore: null }, { aiAnalysisJson: null }] } }),
       prisma.vacancy.count({ where: { OR: [{ status: "ai_recommended" }, { status: "ready_to_apply" }] } }),
-      prisma.vacancy.count({ where: { status: "ready_to_apply" } }),
+      prisma.vacancy.count({
+        where: { status: "ready_to_apply", coverLetters: { some: {} } }
+      }),
       prisma.vacancy.count({ where: { status: "applied" } }),
       prisma.company.count(),
       prisma.application.count(),
@@ -78,17 +84,63 @@ export default async function DashboardPage() {
         ))}
       </div>
 
-      <Card className="mt-6">
-        <h2 className="text-xl font-semibold tracking-normal">Следующие шаги</h2>
-        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{nextStepText({ vacancies, withoutAi, aiRecommended, readyToApply })}</p>
-        <div className="mt-5 flex flex-wrap gap-3">
-          {vacancies === 0 ? <LinkButton href="/search">Запустить поиск вакансий</LinkButton> : null}
-          {withoutAi > 0 ? <BulkAiAnalyzeButton label="Проанализировать вакансии" /> : null}
-          {aiRecommended > 0 ? <LinkButton href="/vacancies/recommended">Перейти к рекомендованным</LinkButton> : null}
-          {readyToApply > 0 ? <LinkButton href="/vacancies?status=ready_to_apply">Вакансии для отклика</LinkButton> : null}
-          <LinkButton href="/vacancies/new">Добавить вручную</LinkButton>
-        </div>
-      </Card>
+      <div className="mt-6 grid gap-4 lg:grid-cols-2">
+        <Card>
+          <h2 className="text-xl font-semibold tracking-normal">Активные процессы</h2>
+          {activeProcesses.searchRuns.length === 0 && activeProcesses.processRuns.length === 0 ? (
+            <p className="mt-3 text-sm text-[var(--muted)]">Сейчас нет активных или зависших процессов.</p>
+          ) : (
+            <div className="mt-4 grid gap-3 text-sm">
+              {activeProcesses.searchRuns.map((run) => (
+                <div key={run.id} className="rounded-md border border-[var(--line)] p-3">
+                  <Link href={run.href} className="font-medium hover:text-[var(--accent)]">
+                    Поиск: {run.title}
+                  </Link>
+                  <p className="mt-1 text-xs text-[var(--muted)]">{searchRunStatusLabel(run.status)}</p>
+                </div>
+              ))}
+              {activeProcesses.processRuns.map((run) => (
+                <div key={run.id} className="rounded-md border border-[var(--line)] p-3">
+                  <Link href={run.href} className="font-medium hover:text-[var(--accent)]">
+                    {run.title}
+                  </Link>
+                  <p className="mt-1 text-xs text-[var(--muted)]">
+                    {run.progressCurrent} / {run.progressTotal}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+          <Link href="/processes" className="mt-4 inline-block text-sm underline">
+            Все процессы
+          </Link>
+        </Card>
+
+        <Card>
+          <h2 className="text-xl font-semibold tracking-normal">Что делать дальше</h2>
+          {activeProcesses.actions.length === 0 ? (
+            <p className="mt-3 text-sm text-[var(--muted)]">{nextStepText({ vacancies, withoutAi, aiRecommended, readyToApply })}</p>
+          ) : (
+            <ul className="mt-4 grid gap-2 text-sm">
+              {activeProcesses.actions.map((action) => (
+                <li key={action.href} className="rounded-md border border-[var(--line)] p-3">
+                  <p>{action.message}</p>
+                  <Link href={action.href} className="mt-2 inline-block text-xs underline">
+                    {action.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-5 flex flex-wrap gap-3">
+            {vacancies === 0 ? <LinkButton href="/search">Запустить поиск вакансий</LinkButton> : null}
+            {withoutAi > 0 ? <BulkAiAnalyzeButton label="Проанализировать вакансии" /> : null}
+            {aiRecommended > 0 ? <LinkButton href="/vacancies/recommended">Перейти к рекомендованным</LinkButton> : null}
+            {readyToApply > 0 ? <LinkButton href="/vacancies?status=ready_to_apply">Вакансии для отклика</LinkButton> : null}
+            <LinkButton href="/vacancies/new">Добавить вручную</LinkButton>
+          </div>
+        </Card>
+      </div>
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <ActionList title="Просроченные действия" vacancies={overdueActions} />

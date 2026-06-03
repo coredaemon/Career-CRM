@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { AiAnalysisError } from "@/lib/ai-errors";
 import { collectHhVacancies, type HhProgressEvent } from "@/lib/hh-search";
 import { prisma } from "@/lib/prisma";
+import { recalculateSearchRunStats } from "@/lib/search-run-stats";
 import { getUserSettings } from "@/lib/settings";
 import { analyzeStoredVacancy } from "@/lib/vacancy-ai-workflow";
 import { createInteraction, findOrCreateCompany, vacancyCreateData } from "@/lib/vacancy-service";
@@ -32,6 +34,8 @@ type ProgressState = {
   recommended: number;
   needsReview: number;
   skippedByAi: number;
+  coverLetters: number;
+  analysisErrors: number;
 };
 
 const initialProgress: ProgressState = {
@@ -44,7 +48,9 @@ const initialProgress: ProgressState = {
   errors: 0,
   recommended: 0,
   needsReview: 0,
-  skippedByAi: 0
+  skippedByAi: 0,
+  coverLetters: 0,
+  analysisErrors: 0
 };
 
 export async function POST(request: Request) {
@@ -245,24 +251,42 @@ export async function POST(request: Request) {
             }
 
             try {
-              await log(`AI анализирует: ${vacancy.title}`, "analyzing_ai");
+              await log(`Запускаем AI-анализ: ${vacancy.title}`, "analyzing_ai");
               const result = await analyzeStoredVacancy({ vacancyId, resumeId: body.resumeId, searchProfileId: profile.id });
               progress.analyzed += 1;
+              progress.coverLetters += 1;
               if (result.vacancy.status === "ready_to_apply" || result.vacancy.status === "ai_recommended") progress.recommended += 1;
               if (result.vacancy.status === "needs_review") progress.needsReview += 1;
               if (result.vacancy.status === "rejected_by_ai") progress.skippedByAi += 1;
               await prisma.searchRunItem.updateMany({ where: { searchRunId: runId, vacancyId }, data: { status: "analyzed" } });
+              await log(`AI-анализ завершён: ${vacancy.title}`, "analyzing_ai");
               await log(`Сопроводительное создано: ${vacancy.title}`, "analyzing_ai");
             } catch (error) {
-              const message = `${vacancy?.title || vacancyId}: ${error instanceof Error ? error.message : "AI-анализ не удался"}`;
+              const isInvalidJson = error instanceof AiAnalysisError && error.code === "INVALID_AI_JSON";
+              const message = isInvalidJson
+                ? `${vacancy?.title || vacancyId}: ${error.userMessage}`
+                : `${vacancy?.title || vacancyId}: ${error instanceof Error ? error.message : "AI-анализ не удался"}`;
               progress.errors += 1;
+              progress.analysisErrors += 1;
               errors.push(message);
-              await prisma.vacancy.update({ where: { id: vacancyId }, data: { status: "analysis_error", recommendation: message } });
+              await prisma.vacancy.update({
+                where: { id: vacancyId },
+                data: {
+                  status: "analysis_error",
+                  recommendation: message,
+                  analysisErrorCode: isInvalidJson ? "INVALID_AI_JSON" : "AI_ANALYSIS_FAILED",
+                  analysisErrorMessage: isInvalidJson ? error.userMessage : message
+                }
+              });
               await prisma.searchRunItem.updateMany({
                 where: { searchRunId: runId, vacancyId },
-                data: { status: "analysis_error", errorMessage: message }
+                data: {
+                  status: "analysis_error",
+                  errorCode: isInvalidJson ? "INVALID_AI_JSON" : "AI_ANALYSIS_FAILED",
+                  errorMessage: message
+                }
               });
-              await log(message, "error");
+              await log(isInvalidJson ? `Ошибка анализа: модель вернула невалидный JSON — ${vacancy?.title}` : message, "error");
             }
           }
         } else if (body.analyzeAfterCollect && !settings.aiConfigured) {
@@ -288,8 +312,13 @@ export async function POST(request: Request) {
           }
         });
 
+        if (runId) {
+          await recalculateSearchRunStats(runId);
+        }
+
         await log(finalStatus === "completed" ? "Поиск завершён." : "Поиск остановлен.", finalStatus);
-        send({ type: "done", run: finished, progress, errors, stoppedByCaptcha: collected.stoppedByCaptcha });
+        const refreshed = runId ? await prisma.searchRun.findUnique({ where: { id: runId } }) : finished;
+        send({ type: "done", run: refreshed ?? finished, progress, errors, stoppedByCaptcha: collected.stoppedByCaptcha });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Поиск не удался.";
         errors.push(message);
@@ -301,15 +330,24 @@ export async function POST(request: Request) {
               status: "error",
               stage: "error",
               finishedAt: new Date(),
+              errorMessage: message,
               totalErrors: progress.errors,
               progressJson: JSON.stringify(progress),
               logJson: JSON.stringify(logs.slice(-250), null, 2),
               errorLogJson: JSON.stringify(errors, null, 2)
             }
           });
+          await recalculateSearchRunStats(runId);
         }
         send({ type: "error", message, progress, errors });
       } finally {
+        if (runId) {
+          try {
+            await recalculateSearchRunStats(runId);
+          } catch {
+            // ignore if run was not created
+          }
+        }
         controller.close();
       }
     }

@@ -1,6 +1,8 @@
 import { z } from "zod";
-import { callAiRouter } from "@/lib/ai-router";
+import { AiAnalysisError, INVALID_AI_JSON_MESSAGE } from "@/lib/ai-errors";
+import { callAiRouter, logAiCallError } from "@/lib/ai-router";
 import { chooseModelForRole, providerPresets } from "@/lib/ai-presets";
+import { extractJsonFromAiResponse } from "@/lib/extract-json";
 
 export const aiProviderPresets = [
   {
@@ -242,37 +244,122 @@ ${JSON.stringify(params.vacancy, null, 2)}`
     }
   ];
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  let lastRaw = "";
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     const result = await callAiRouter({
       role: "analysis",
       taskType: "vacancy_analysis",
       messages:
         attempt === 0
           ? baseMessages
-          : [...baseMessages, { role: "user", content: "Предыдущий ответ был невалидным JSON. Верни только JSON без markdown." }],
+          : [
+              ...baseMessages,
+              {
+                role: "user",
+                content:
+                  "Предыдущий ответ был невалидным JSON. Верни только JSON без markdown, без пояснений и без code block."
+              }
+            ],
       responseFormat: "json",
-      temperature: 0.15
+      temperature: attempt === 0 ? 0.15 : 0.05
     });
 
+    lastRaw = result.content;
+
     try {
+      const jsonText = extractJsonFromAiResponse(result.content);
+      if (!jsonText) throw new Error("INVALID_AI_JSON");
       return {
-        analysis: vacancyAnalysisSchema.parse(JSON.parse(result.content)),
+        analysis: vacancyAnalysisSchema.parse(JSON.parse(jsonText)),
         meta: { provider: result.provider, model: result.model, role: result.role }
       };
     } catch {
-      if (attempt === 1) throw new Error("AI вернул невалидный JSON анализа вакансии. Попробуйте ещё раз или выберите другую модель аналитика.");
+      if (attempt === 2) {
+        await logAiCallError({
+          taskType: "vacancy_analysis",
+          provider: result.provider,
+          model: result.model,
+          role: result.role,
+          errorCode: "INVALID_AI_JSON",
+          errorMessage: "AI вернул невалидный JSON анализа вакансии."
+        });
+        throw new AiAnalysisError({
+          code: "INVALID_AI_JSON",
+          userMessage: INVALID_AI_JSON_MESSAGE,
+          technicalDetails: lastRaw.slice(0, 500)
+        });
+      }
     }
   }
 
-  throw new Error("Не удалось получить анализ вакансии.");
+  throw new AiAnalysisError({
+    code: "INVALID_AI_JSON",
+    userMessage: INVALID_AI_JSON_MESSAGE
+  });
+}
+
+async function parseRouterJson<T>(params: {
+  role: "analysis" | "fast" | "writer" | "reviewer";
+  taskType: string;
+  schema: z.ZodType<T>;
+  messages: ChatMessage[];
+  temperatures?: number[];
+}) {
+  const temperatures = params.temperatures ?? [0.15, 0.05];
+  let lastMeta: { provider: string; model: string; role: string } | null = null;
+
+  for (let attempt = 0; attempt < temperatures.length; attempt += 1) {
+    const result = await callAiRouter({
+      role: params.role,
+      taskType: params.taskType,
+      messages:
+        attempt === 0
+          ? params.messages
+          : [
+              ...params.messages,
+              {
+                role: "user",
+                content: "Предыдущий ответ был невалидным JSON. Верни только JSON без markdown."
+              }
+            ],
+      responseFormat: "json",
+      temperature: temperatures[attempt]
+    });
+    lastMeta = { provider: result.provider, model: result.model, role: result.role };
+    const jsonText = extractJsonFromAiResponse(result.content);
+    if (jsonText) {
+      try {
+        return { value: params.schema.parse(JSON.parse(jsonText)), meta: lastMeta };
+      } catch {
+        // retry
+      }
+    }
+  }
+
+  if (lastMeta) {
+    await logAiCallError({
+      taskType: params.taskType,
+      provider: lastMeta.provider,
+      model: lastMeta.model,
+      role: params.role,
+      errorCode: "INVALID_AI_JSON",
+      errorMessage: "AI вернул невалидный JSON."
+    });
+  }
+
+  throw new AiAnalysisError({
+    code: "INVALID_AI_JSON",
+    userMessage: INVALID_AI_JSON_MESSAGE
+  });
 }
 
 export async function reviewVacancyAnalysisWithAi(params: { analysis: VacancyAnalysis; vacancy: Record<string, unknown> }) {
-  const result = await callAiRouter({
+  const parsed = await parseRouterJson({
     role: "reviewer",
     taskType: "vacancy_review",
-    responseFormat: "json",
-    temperature: 0.1,
+    schema: reviewerSchema,
+    temperatures: [0.1, 0.05],
     messages: [
       { role: "system", content: "Ты проверяешь спорный AI-анализ вакансии. Верни только JSON. Не придумывай факты." },
       {
@@ -289,8 +376,8 @@ ${JSON.stringify(params.vacancy, null, 2)}`
   });
 
   return {
-    review: reviewerSchema.parse(JSON.parse(result.content)),
-    meta: { provider: result.provider, model: result.model, role: result.role }
+    review: parsed.value,
+    meta: parsed.meta
   };
 }
 
@@ -319,16 +406,16 @@ export async function generateCoverLetterWithAi(params: {
     tone: params.instruction || params.analysis.cover_letter_brief.tone
   };
 
-  const result = await callAiRouter({
+  const parsed = await parseRouterJson({
     role: "writer",
     taskType: "cover_letter",
-    responseFormat: "json",
-    temperature: 0.25,
+    schema: z.object({ cover_letter: z.string().min(1) }),
+    temperatures: [0.25, 0.1],
     messages: [
       {
         role: "system",
         content:
-          "Ты пишешь короткое сопроводительное письмо на русском языке. Не придумывай опыт, используй только факты из выжимки и резюме. Письмо должно быть деловым, живым и пригодным для копирования работодателю. Верни строгий JSON: {\"cover_letter\":\"...\"}."
+          'Ты пишешь короткое сопроводительное письмо на русском языке. Не придумывай опыт, используй только факты из выжимки и резюме. Письмо должно быть деловым, живым и пригодным для копирования работодателю. Верни строгий JSON: {"cover_letter":"..."}.'
       },
       {
         role: "user",
@@ -344,8 +431,8 @@ ${resumeFacts}`
   });
 
   return {
-    coverLetter: z.object({ cover_letter: z.string().min(1) }).parse(JSON.parse(result.content)).cover_letter,
-    meta: { provider: result.provider, model: result.model, role: result.role }
+    coverLetter: parsed.value.cover_letter,
+    meta: parsed.meta
   };
 }
 

@@ -26,7 +26,7 @@ const tabs = [
 export default async function VacanciesPage({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
   const { status } = await searchParams;
   const where = vacancyWhere(status);
-  const [vacancies, totalVacancies, withoutAi] = await Promise.all([
+  const [vacancies, totalVacancies, withoutAi, analysisErrors, lastSearchRun] = await Promise.all([
     prisma.vacancy.findMany({
       where,
       orderBy: { createdAt: "desc" },
@@ -36,7 +36,9 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
       }
     }),
     prisma.vacancy.count(),
-    prisma.vacancy.count({ where: { OR: [{ matchScore: null }, { aiAnalysisJson: null }] } })
+    prisma.vacancy.count({ where: { OR: [{ matchScore: null }, { aiAnalysisJson: null }] } }),
+    prisma.vacancy.count({ where: { status: "analysis_error" } }),
+    prisma.searchRun.findFirst({ orderBy: { startedAt: "desc" }, select: { id: true } })
   ]);
 
   return (
@@ -72,13 +74,48 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
               <h2 className="text-lg font-semibold tracking-normal">Есть вакансии без AI-анализа: {withoutAi}</h2>
               <p className="mt-1 text-sm text-[var(--muted)]">Запустите анализ, чтобы получить score, рекомендации и сопроводительные письма.</p>
             </div>
-            <BulkAiAnalyzeButton />
+            <div className="flex flex-wrap gap-2">
+              <BulkAiAnalyzeButton />
+              {lastSearchRun ? (
+                <Link href={`/search/runs/${lastSearchRun.id}`} className="rounded-md border border-[var(--line)] px-4 py-2 text-sm hover:bg-[var(--soft)]">
+                  Результаты последнего поиска
+                </Link>
+              ) : null}
+            </div>
+          </div>
+        </Card>
+      ) : null}
+
+      {analysisErrors > 0 ? (
+        <Card className="mb-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold tracking-normal">Ошибки AI-анализа: {analysisErrors}</h2>
+              <p className="mt-1 text-sm text-[var(--muted)]">Можно повторить анализ для вакансий с ошибкой формата или сбоя модели.</p>
+            </div>
+            <BulkAiAnalyzeButton label="Повторить ошибки AI" retryErrorsOnly />
           </div>
         </Card>
       ) : null}
 
       {vacancies.length === 0 ? (
-        <EmptyState title={emptyTitle(totalVacancies, status, withoutAi)} description={emptyDescription(totalVacancies, status, withoutAi)} />
+        <EmptyState
+          title={emptyTitle(totalVacancies, status, withoutAi)}
+          description={emptyDescription(totalVacancies, status, withoutAi)}
+          actions={
+            status === "ai_recommended" && withoutAi > 0 ? (
+              <div className="mt-4 flex flex-wrap gap-2">
+                <BulkAiAnalyzeButton />
+                <BulkAiAnalyzeButton label="Повторить ошибки AI" retryErrorsOnly />
+                {lastSearchRun ? (
+                  <Link href={`/search/runs/${lastSearchRun.id}`} className="rounded-md border border-[var(--line)] px-4 py-2 text-sm">
+                    Результаты последнего поиска
+                  </Link>
+                ) : null}
+              </div>
+            ) : undefined
+          }
+        />
       ) : (
         <div className="grid gap-4">
           {vacancies.map((vacancy) => {
@@ -136,7 +173,13 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
 function vacancyWhere(status?: string): Prisma.VacancyWhereInput | undefined {
   if (!status) return undefined;
   if (status === "no_ai") return { OR: [{ matchScore: null }, { aiAnalysisJson: null }] };
-  if (status === "ai_recommended") return { OR: [{ status: "ai_recommended" }, { status: "ready_to_apply" }] };
+  if (status === "ai_recommended") return { status: "ai_recommended" };
+  if (status === "ready_to_apply") {
+    return {
+      status: "ready_to_apply",
+      coverLetters: { some: {} }
+    };
+  }
   return { status };
 }
 
