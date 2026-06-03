@@ -6,15 +6,17 @@ export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   const settings = await getUserSettings();
-  const [resumes, profiles, vacancies, aiRecommended, readyToApply, companies, applications, overdueActions, todayActions, upcomingActions] =
+  const [resumes, profiles, vacancies, aiRecommended, readyToApply, applied, companies, applications, needResponseCheck, overdueActions, todayActions] =
     await Promise.all([
       prisma.resume.count(),
       prisma.searchProfile.count(),
       prisma.vacancy.count(),
       prisma.vacancy.count({ where: { status: "ai_recommended" } }),
       prisma.vacancy.count({ where: { status: "ready_to_apply" } }),
+      prisma.vacancy.count({ where: { status: "applied" } }),
       prisma.company.count(),
       prisma.application.count(),
+      prisma.vacancy.count({ where: { nextActionType: "проверить ответ" } }),
       prisma.vacancy.findMany({
         where: { nextActionAt: { lt: startOfToday() } },
         orderBy: { nextActionAt: "asc" },
@@ -23,12 +25,6 @@ export default async function DashboardPage() {
       }),
       prisma.vacancy.findMany({
         where: { nextActionAt: { gte: startOfToday(), lt: startOfTomorrow() } },
-        orderBy: { nextActionAt: "asc" },
-        take: 5,
-        include: { company: true }
-      }),
-      prisma.vacancy.findMany({
-        where: { nextActionAt: { gte: startOfTomorrow() } },
         orderBy: { nextActionAt: "asc" },
         take: 5,
         include: { company: true }
@@ -45,8 +41,7 @@ export default async function DashboardPage() {
         <Card className="max-w-3xl">
           <h2 className="text-2xl font-semibold tracking-normal">Настройте безопасное ядро</h2>
           <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
-            Мастер проведёт через настройку AI, вставку текста резюме, анализ и создание первого профиля поиска. CareerOS не отправляет
-            отклики автоматически и не автоматизирует hh.
+            Мастер проведёт через настройку AI, добавление резюме, анализ и создание первого профиля поиска. CareerOS не отправляет отклики автоматически.
           </p>
           <div className="mt-6">
             <LinkButton href="/onboarding">Пройти первичную настройку</LinkButton>
@@ -60,24 +55,17 @@ export default async function DashboardPage() {
     ["Резюме", resumes],
     ["Профили поиска", profiles],
     ["Вакансии", vacancies],
-    ["AI рекомендует", aiRecommended],
+    ["Рекомендованные", aiRecommended],
     ["Готовы к отклику", readyToApply],
-    ["Отклики", applications],
-    ["Компании", companies]
+    ["Отклики отправлены", applied],
+    ["Нужно проверить ответы", needResponseCheck],
+    ["Компании", companies],
+    ["Отклики в CRM", applications]
   ];
-
-  const nextStep =
-    vacancies === 0
-      ? "Добавьте вакансию вручную и запустите AI-разбор."
-      : readyToApply > 0
-        ? "Есть вакансии, готовые к отклику: отправьте отклик вручную и отметьте статус."
-        : aiRecommended > 0
-          ? "Посмотрите вакансии, которые рекомендует AI, и решите, какие готовить к отклику."
-          : "Разберите новые вакансии или переведите подходящие в следующий статус.";
 
   return (
     <>
-      <PageHeader title="Главная" description="Локальная картина поиска работы без внешней автоматизации." />
+      <PageHeader title="Главная" description="Рабочая картина поиска: что найдено, куда можно откликаться и какие действия пора выполнить." />
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {stats.map(([label, value]) => (
           <Card key={label.toString()}>
@@ -89,20 +77,28 @@ export default async function DashboardPage() {
 
       <Card className="mt-6">
         <h2 className="text-xl font-semibold tracking-normal">Следующие шаги</h2>
-        <p className="mt-2 text-sm text-[var(--muted)]">{nextStep}</p>
+        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{nextStepText({ vacancies, aiRecommended, readyToApply })}</p>
         <div className="mt-5 flex flex-wrap gap-3">
-          <LinkButton href="/vacancies/new">Добавить вакансию</LinkButton>
-          <LinkButton href="/vacancies?status=ai_recommended">Вакансии, которые рекомендует AI</LinkButton>
+          {vacancies === 0 ? <LinkButton href="/search">Запустить поиск вакансий</LinkButton> : null}
+          {aiRecommended > 0 ? <LinkButton href="/vacancies/recommended">Перейти к рекомендованным</LinkButton> : null}
+          {readyToApply > 0 ? <LinkButton href="/vacancies?status=ready_to_apply">Вакансии для отклика</LinkButton> : null}
+          <LinkButton href="/vacancies/new">Добавить вручную</LinkButton>
         </div>
       </Card>
 
-      <div className="mt-6 grid gap-4 lg:grid-cols-3">
+      <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <ActionList title="Просроченные действия" vacancies={overdueActions} />
         <ActionList title="Действия на сегодня" vacancies={todayActions} />
-        <ActionList title="Ближайшие действия" vacancies={upcomingActions} />
       </div>
     </>
   );
+}
+
+function nextStepText({ vacancies, aiRecommended, readyToApply }: { vacancies: number; aiRecommended: number; readyToApply: number }) {
+  if (vacancies === 0) return "Запустите поиск вакансий по профилю. CareerOS откроет hh в браузере, соберёт карточки и сможет прогнать новые вакансии через AI.";
+  if (readyToApply > 0) return "Есть вакансии, куда можно откликнуться прямо сейчас: откройте hh, скопируйте письмо и отправьте отклик вручную.";
+  if (aiRecommended > 0) return "AI нашёл подходящие вакансии. Проверьте рекомендованные и решите, какие перевести в готовые к отклику.";
+  return "Продолжайте разбор найденных вакансий или запустите новый поиск небольшими партиями.";
 }
 
 function ActionList({

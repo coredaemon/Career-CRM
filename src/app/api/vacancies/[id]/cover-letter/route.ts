@@ -33,6 +33,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
     const result = await regenerateCoverLetterWithAi({
       resumeText: resume.originalText,
+      confirmedFacts: resume.confirmedFacts,
       instruction: body.instruction,
       analysis,
       vacancy: {

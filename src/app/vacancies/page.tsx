@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { CopyButton } from "@/components/copy-button";
+import { VacancyQuickActions } from "@/components/vacancy-quick-actions";
 import { VacancyStatusSelect } from "@/components/vacancy-status-select";
 import { Card, EmptyState, LinkButton, PageHeader } from "@/components/ui";
 import { fromJsonText } from "@/lib/json";
@@ -33,7 +34,12 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
       <PageHeader
         title="Вакансии"
         description="Ручной список вакансий с AI-разбором, статусами и сопроводительными письмами."
-        action={<LinkButton href="/vacancies/new">Добавить вакансию</LinkButton>}
+        action={
+          <div className="flex flex-wrap gap-2">
+            <LinkButton href="/search">Запустить поиск</LinkButton>
+            <LinkButton href="/vacancies/new">Добавить вакансию</LinkButton>
+          </div>
+        }
       />
       <div className="mb-5 flex flex-wrap gap-2">
         {tabs.map((tab) => (
@@ -82,6 +88,7 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
                     Открыть
                   </Link>
                   {vacancy.sourceUrl ? <CopyButton text={vacancy.sourceUrl} label="Скопировать ссылку" /> : null}
+                  <VacancyQuickActions vacancyId={vacancy.id} sourceUrl={vacancy.sourceUrl} />
                   <div className="min-w-56">
                     <VacancyStatusSelect vacancyId={vacancy.id} currentStatus={vacancy.status} />
                   </div>

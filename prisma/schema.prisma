@@ -52,8 +52,10 @@ model Resume {
   id             String           @id @default(cuid())
   title          String
   sourceType     ResumeSourceType
+  sourceFileName String?
   originalText   String
   aiSummary      String?
+  confirmedFacts String?
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
   applications   Application[]
@@ -75,6 +77,7 @@ model SearchProfile {
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
   resume              Resume              @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  searchRuns          SearchRun[]
   vacancies           Vacancy[]
 }
 
@@ -85,9 +88,13 @@ model Vacancy {
   title                   String
   source                  String
   sourceUrl               String?
+  sourceVacancyId         String?
   salaryText              String?
   location                String?
   workFormat              String?
+  publishedAtText         String?
+  employerUrl             String?
+  isArchived              Boolean?
   rawDescription          String?
   status                  String
   matchScore              Int?
@@ -113,7 +120,39 @@ model Vacancy {
   company                 Company?       @relation(fields: [companyId], references: [id], onDelete: SetNull)
   coverLetters            CoverLetter[]
   interactions            Interaction[]
+  searchRunItems          SearchRunItem[]
   searchProfile           SearchProfile? @relation(fields: [searchProfileId], references: [id], onDelete: SetNull)
+}
+
+model SearchRun {
+  id              String          @id @default(cuid())
+  searchProfileId String?
+  status          String
+  startedAt       DateTime        @default(now())
+  finishedAt      DateTime?
+  queriesJson     String
+  totalFound      Int             @default(0)
+  totalCreated    Int             @default(0)
+  totalDuplicates Int             @default(0)
+  totalAnalyzed   Int             @default(0)
+  totalErrors     Int             @default(0)
+  errorLogJson    String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  searchProfile   SearchProfile?  @relation(fields: [searchProfileId], references: [id], onDelete: SetNull)
+  items           SearchRunItem[]
+}
+
+model SearchRunItem {
+  id          String    @id @default(cuid())
+  searchRunId String
+  vacancyId   String?
+  sourceUrl   String
+  status      String
+  errorMessage String?
+  createdAt   DateTime  @default(now())
+  searchRun   SearchRun @relation(fields: [searchRunId], references: [id], onDelete: Cascade)
+  vacancy     Vacancy?  @relation(fields: [vacancyId], references: [id], onDelete: SetNull)
 }
 
 model AiCallLog {

@@ -2,6 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CopyButton } from "@/components/copy-button";
 import { CoverLetterTools } from "@/components/cover-letter-tools";
+import { VacancyAiRetryButton } from "@/components/vacancy-ai-retry-button";
+import { VacancyQuickActions } from "@/components/vacancy-quick-actions";
 import { VacancyStatusSelect } from "@/components/vacancy-status-select";
 import { Card, PageHeader } from "@/components/ui";
 import { fromJsonText } from "@/lib/json";
@@ -168,6 +170,14 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
           <Card>
             <h2 className="mb-3 text-lg font-semibold tracking-normal">Статус</h2>
             <VacancyStatusSelect vacancyId={vacancy.id} currentStatus={vacancy.status} />
+          </Card>
+          <Card>
+            <h2 className="mb-3 text-lg font-semibold tracking-normal">Быстрые действия</h2>
+            <VacancyQuickActions vacancyId={vacancy.id} sourceUrl={vacancy.sourceUrl} />
+          </Card>
+          <Card>
+            <h2 className="mb-3 text-lg font-semibold tracking-normal">AI-анализ</h2>
+            <VacancyAiRetryButton vacancyId={vacancy.id} />
           </Card>
           <Card>
             <h2 className="text-lg font-semibold tracking-normal">Совпадение</h2>

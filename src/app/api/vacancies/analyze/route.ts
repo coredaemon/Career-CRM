@@ -89,6 +89,7 @@ export async function POST(request: Request) {
 
     const { coverLetter: coverLetterText, meta: writerMeta } = await generateCoverLetterWithAi({
       resumeText: resume.originalText,
+      confirmedFacts: resume.confirmedFacts,
       vacancy: {
         title: draft.title,
         companyName: draft.companyName || null,

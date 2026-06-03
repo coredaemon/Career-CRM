@@ -296,10 +296,18 @@ ${JSON.stringify(params.vacancy, null, 2)}`
 
 export async function generateCoverLetterWithAi(params: {
   resumeText: string;
+  confirmedFacts?: string | null;
   vacancy: { title: string; companyName?: string | null; rawDescription?: string | null; aiAnalysisJson?: string | null };
   analysis: VacancyAnalysis;
   instruction?: string;
 }) {
+  const resumeFacts = [
+    params.resumeText.slice(0, 2500),
+    params.confirmedFacts ? `Подтверждённые пользователем факты:\n${params.confirmedFacts}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
   const brief = {
     vacancy_title: params.vacancy.title,
     company: params.vacancy.companyName,
@@ -330,7 +338,7 @@ export async function generateCoverLetterWithAi(params: {
 ${JSON.stringify(brief, null, 2)}
 
 Минимальные факты из резюме:
-${params.resumeText}`
+${resumeFacts}`
       }
     ]
   });
