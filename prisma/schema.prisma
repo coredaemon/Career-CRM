@@ -59,7 +59,11 @@ model Resume {
   sourceFileName String?
   originalText   String
   aiSummary      String?
+  aiSummaryStale Boolean          @default(false)
   confirmedFacts String?
+  isActive       Boolean          @default(false)
+  isArchived     Boolean          @default(false)
+  archivedAt     DateTime?
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
   applications   Application[]
@@ -78,6 +82,8 @@ model SearchProfile {
   negativeSignalsJson String
   stopWordsJson       String
   status              SearchProfileStatus @default(draft)
+  isActive            Boolean             @default(false)
+  archivedAt          DateTime?
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
   resume              Resume              @relation(fields: [resumeId], references: [id], onDelete: Cascade)

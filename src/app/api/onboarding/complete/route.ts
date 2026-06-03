@@ -30,12 +30,16 @@ export async function POST(request: Request) {
     const settings = await getUserSettings();
 
     const result = await prisma.$transaction(async (tx) => {
+      await tx.resume.updateMany({ data: { isActive: false } });
+      await tx.searchProfile.updateMany({ data: { isActive: false } });
+
       const resume = await tx.resume.create({
         data: {
           title: body.resumeTitle,
           sourceType: "text",
           originalText: body.resumeText,
-          aiSummary: body.analysis.profile_summary
+          aiSummary: JSON.stringify(body.analysis, null, 2),
+          isActive: true
         }
       });
 
@@ -49,7 +53,8 @@ export async function POST(request: Request) {
           positiveSignalsJson: toJsonText(body.analysis.positive_signals),
           negativeSignalsJson: toJsonText(body.analysis.negative_signals),
           stopWordsJson: toJsonText(body.analysis.stop_words),
-          status: "active"
+          status: "active",
+          isActive: true
         }
       });
 

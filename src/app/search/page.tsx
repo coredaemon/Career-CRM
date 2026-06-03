@@ -12,7 +12,11 @@ export default async function SearchPage() {
 
   const [profiles, runs] = await Promise.all([
     prisma.searchProfile.findMany({
-      orderBy: { createdAt: "desc" },
+      where: {
+        status: { not: "archived" },
+        resume: { isArchived: false }
+      },
+      orderBy: [{ isActive: "desc" }, { updatedAt: "desc" }],
       include: { resume: true }
     }),
     prisma.searchRun.findMany({

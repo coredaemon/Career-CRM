@@ -21,6 +21,7 @@ const nav = [
   { href: "/applications", label: "Отклики" },
   { href: "/memory", label: "Память AI" },
   { href: "/settings/profile", label: "Ожидания" },
+  { href: "/settings/data", label: "Данные" },
   { href: "/settings/ai", label: "Настройки AI" }
 ];
 

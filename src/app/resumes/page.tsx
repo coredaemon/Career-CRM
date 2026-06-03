@@ -7,15 +7,26 @@ export const dynamic = "force-dynamic";
 
 export default async function ResumesPage() {
   const resumes = await prisma.resume.findMany({
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ isActive: "desc" }, { isArchived: "asc" }, { updatedAt: "desc" }],
     select: {
       id: true,
       title: true,
       sourceType: true,
       sourceFileName: true,
       aiSummary: true,
+      aiSummaryStale: true,
       confirmedFacts: true,
-      createdAt: true
+      isActive: true,
+      isArchived: true,
+      createdAt: true,
+      updatedAt: true,
+      _count: {
+        select: {
+          searchProfiles: true,
+          applications: true,
+          coverLetters: true
+        }
+      }
     }
   });
 
@@ -23,7 +34,7 @@ export default async function ResumesPage() {
     <>
       <PageHeader
         title="Резюме"
-        description="Загрузите PDF с текстовым слоем или вставьте текст вручную. Перед сохранением и AI-анализом текст можно поправить."
+        description="Управляйте несколькими версиями резюме: добавляйте новое, редактируйте текст, назначайте активное и создавайте профили поиска без повторного первого запуска."
       />
       <div className="grid gap-6 xl:grid-cols-[1fr_420px]">
         <div className="grid content-start gap-4">
@@ -34,14 +45,28 @@ export default async function ResumesPage() {
             />
           ) : (
             resumes.map((resume) => (
-              <Card key={resume.id}>
-                <Link href={`/resumes/${resume.id}`} className="text-xl font-semibold tracking-normal hover:text-[var(--accent)]">
-                  {resume.title}
-                </Link>
-                <p className="mt-1 text-sm text-[var(--muted)]">
-                  {resume.sourceType === "text" ? "текст" : "файл"} · {resume.sourceFileName || "без имени файла"} ·{" "}
-                  {resume.createdAt.toLocaleDateString("ru-RU")}
-                </p>
+              <Card key={resume.id} className={resume.isArchived ? "opacity-70" : ""}>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <Link href={`/resumes/${resume.id}`} className="text-xl font-semibold tracking-normal hover:text-[var(--accent)]">
+                      {resume.title}
+                    </Link>
+                    <p className="mt-1 text-sm text-[var(--muted)]">
+                      {resume.sourceType === "text" ? "текст" : "файл"} · {resume.sourceFileName || "без имени файла"} · обновлено{" "}
+                      {resume.updatedAt.toLocaleDateString("ru-RU")}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {resume.isActive ? <Badge>активное</Badge> : null}
+                    {resume.isArchived ? <Badge>архив</Badge> : null}
+                    {resume.aiSummaryStale ? <Badge>AI-анализ устарел</Badge> : null}
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-2 text-sm text-[var(--muted)] sm:grid-cols-3">
+                  <Metric label="Профилей поиска" value={resume._count.searchProfiles} />
+                  <Metric label="Писем" value={resume._count.coverLetters} />
+                  <Metric label="Откликов" value={resume._count.applications} />
+                </div>
                 <div className="mt-3 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
                   <span className="rounded-md bg-[var(--soft)] px-2 py-1">{resume.aiSummary ? "AI-анализ есть" : "AI-анализ не выполнен"}</span>
                   <span className="rounded-md bg-[var(--soft)] px-2 py-1">
@@ -57,3 +82,17 @@ export default async function ResumesPage() {
     </>
   );
 }
+
+function Badge({ children }: { children: React.ReactNode }) {
+  return <span className="rounded-md border border-[var(--line)] px-3 py-1 text-xs text-[var(--muted)]">{children}</span>;
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md bg-[var(--soft)] p-3">
+      <div className="text-xs">{label}</div>
+      <div className="mt-1 text-lg font-semibold text-[var(--foreground)]">{value}</div>
+    </div>
+  );
+}
+

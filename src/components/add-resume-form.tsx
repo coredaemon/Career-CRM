@@ -9,6 +9,7 @@ export function AddResumeForm() {
   const [title, setTitle] = useState("");
   const [originalText, setOriginalText] = useState("");
   const [sourceFileName, setSourceFileName] = useState("");
+  const [makeActive, setMakeActive] = useState(true);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState<"save" | "pdf" | null>(null);
 
@@ -43,7 +44,8 @@ export function AddResumeForm() {
         title,
         originalText,
         sourceType: sourceFileName ? "file" : "text",
-        sourceFileName: sourceFileName || null
+        sourceFileName: sourceFileName || null,
+        makeActive
       })
     });
     const data = await response.json();
@@ -82,6 +84,10 @@ export function AddResumeForm() {
         <Field label="Текст резюме" hint="Перед сохранением можно вручную поправить извлечённый текст.">
           <textarea className={`${inputClass} min-h-72`} value={originalText} onChange={(event) => setOriginalText(event.target.value)} />
         </Field>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={makeActive} onChange={(event) => setMakeActive(event.target.checked)} />
+          Сделать это резюме активным по умолчанию
+        </label>
         <Button onClick={saveResume} disabled={Boolean(busy) || !title || originalText.trim().length < 50}>
           {busy === "save" ? "Сохраняем..." : "Сохранить резюме"}
         </Button>

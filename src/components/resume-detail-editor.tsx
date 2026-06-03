@@ -10,6 +10,7 @@ type ResumeEditorProps = {
     title: string;
     originalText: string;
     aiSummary: string | null;
+    aiSummaryStale: boolean;
     confirmedFacts: string | null;
   };
 };
@@ -116,6 +117,11 @@ export function ResumeDetailEditor({ resume }: ResumeEditorProps) {
 
       <Card className="grid gap-4">
         <h2 className="text-xl font-semibold tracking-normal">AI-анализ резюме</h2>
+        {resume.aiSummaryStale ? (
+          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+            AI-анализ устарел после изменения текста резюме. Рекомендуется повторно проанализировать резюме и затем обновить профили поиска вручную.
+          </div>
+        ) : null}
         {parsedSummary ? (
           <div className="grid gap-4">
             <SummaryBlock title="Краткий профиль" value={parsedSummary.profile_summary || parsedSummary.profile_title} />

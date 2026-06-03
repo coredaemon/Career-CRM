@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     if (body.save && body.resumeId) {
       await prisma.resume.update({
         where: { id: body.resumeId },
-        data: { aiSummary: JSON.stringify(analysis, null, 2) }
+        data: { aiSummary: JSON.stringify(analysis, null, 2), aiSummaryStale: false }
       });
     }
 
