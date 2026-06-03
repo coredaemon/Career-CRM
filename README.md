@@ -89,6 +89,12 @@ If the search found nothing, try broader queries, a different region, or a small
 
 If AI analysis did not run, check `Настройки AI`, then use `Проанализировать непроанализированные` on the vacancies page. CareerOS keeps the vacancy even when AI fails and marks it for review.
 
+### hh service links and run statistics
+
+- CareerOS skips non-vacancy hh URLs (search pages, map views, cookie/navigation pages). They appear in the run log as a single summary line, for example `Пропущены служебные ссылки hh: 8`, and in **Найденные вакансии** as **Служебная ссылка** (grouped under «Служебные и пропущенные ссылки»).
+- Factual counters for a run are on **Детали запуска** (`/search/runs/[id]`): found records, valid/new vacancies, duplicates, skipped URLs, AI sent/completed/errors. Counts are derived from `SearchRunItem` rows.
+- If top metrics look wrong while the list below has items, click **Пересчитать статистику** on that page to refresh stored totals from the database.
+
 ## Progress and Long-Running Tasks
 
 ### How to tell that search is running

@@ -22,7 +22,19 @@ export default async function ProcessDetailPage({ params }: { params: Promise<{ 
         title={run.title}
         description={`${buildProcessRunUiState(run).humanStatusLabel} · ${run.type}`}
       />
-      <ProcessDetailClient initial={{ id: run.id, status: run.status, title: run.title }} />
+      <ProcessDetailClient
+        initial={{
+          id: run.id,
+          status: run.status,
+          title: run.title,
+          logs: run.logs.map((log) => ({
+            id: log.id,
+            level: log.level,
+            message: log.message,
+            createdAt: log.createdAt.toISOString()
+          }))
+        }}
+      />
       <div className="mt-4">
         <Link href="/processes" className="text-sm underline">
           ← Все процессы

@@ -11,6 +11,7 @@ import { VacancyStatusSelect } from "@/components/vacancy-status-select";
 import { Card, EmptyState, LinkButton, PageHeader } from "@/components/ui";
 import { fromJsonText } from "@/lib/json";
 import { prisma } from "@/lib/prisma";
+import { isVacancyJunkForList, vacancyEligibleForNoAiTab } from "@/lib/vacancy-analysis-eligibility";
 import { vacancyStatusLabel } from "@/lib/vacancy-status";
 
 export const dynamic = "force-dynamic";
@@ -30,15 +31,32 @@ const tabs = [
 export default async function VacanciesPage({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
   const { status } = await searchParams;
   const where = vacancyWhere(status);
-  const [vacancies, totalVacancies, withoutAi, eligibleForBulk, analysisErrors, lastSearchRun, activeSummary] = await Promise.all([
-    prisma.vacancy.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      include: {
-        company: true,
-        coverLetters: { orderBy: { createdAt: "desc" }, take: 1 }
-      }
-    }),
+  const rawVacancies = await prisma.vacancy.findMany({
+    where,
+    orderBy: { createdAt: "desc" },
+    include: {
+      company: true,
+      coverLetters: { orderBy: { createdAt: "desc" }, take: 1 }
+    }
+  });
+
+  const vacancies =
+    status === "no_ai" || status === "analysis_error"
+      ? rawVacancies.filter(
+          (vacancy) =>
+            !isVacancyJunkForList({
+              title: vacancy.title,
+              source: vacancy.source,
+              sourceUrl: vacancy.sourceUrl,
+              sourceVacancyId: vacancy.sourceVacancyId,
+              rawDescription: vacancy.rawDescription,
+              status: vacancy.status,
+              company: vacancy.company
+            })
+        )
+      : rawVacancies;
+
+  const [totalVacancies, withoutAi, eligibleForBulk, analysisErrors, lastSearchRun, activeSummary] = await Promise.all([
     prisma.vacancy.count(),
     prisma.vacancy.count({ where: { OR: [{ matchScore: null }, { aiAnalysisJson: null }] } }),
     countVacanciesEligibleForBulk(),
@@ -149,6 +167,16 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
             const analysis = fromJsonText<{ summary?: string }>(vacancy.aiAnalysisJson, {});
             const redFlags = fromJsonText<string[]>(vacancy.redFlagsJson, []);
             const latestLetter = vacancy.coverLetters[0]?.text;
+            const isJunk = isVacancyJunkForList({
+              title: vacancy.title,
+              source: vacancy.source,
+              sourceUrl: vacancy.sourceUrl,
+              sourceVacancyId: vacancy.sourceVacancyId,
+              rawDescription: vacancy.rawDescription,
+              status: vacancy.status,
+              company: vacancy.company
+            });
+            const hideApplyActions = isJunk || vacancy.status === "invalid_source" || vacancy.status === "skipped_invalid";
             return (
               <Card key={vacancy.id}>
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -169,7 +197,7 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
                   <div>Совпадение: {vacancy.matchScore ?? "нет"}</div>
                 </div>
                 {analysis.summary ? <p className="mt-4 text-sm leading-6 text-[var(--muted)]">{analysis.summary}</p> : null}
-                {!vacancy.aiAnalysisJson ? (
+                {!vacancy.aiAnalysisJson && !hideApplyActions ? (
                   <p className="mt-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
                     Эта вакансия ещё без AI-анализа. Запустите анализ, чтобы получить score и письмо.
                   </p>
@@ -181,9 +209,9 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
                     Открыть
                   </Link>
                   {vacancy.sourceUrl ? <CopyButton text={vacancy.sourceUrl} label="Скопировать ссылку" /> : null}
-                  {latestLetter ? <CopyButton text={latestLetter} label="Скопировать письмо" /> : null}
-                  <VacancyQuickActions vacancyId={vacancy.id} sourceUrl={vacancy.sourceUrl} />
-                  <VacancyAiRetryButton vacancyId={vacancy.id} />
+                  {latestLetter && !hideApplyActions ? <CopyButton text={latestLetter} label="Скопировать письмо" /> : null}
+                  <VacancyQuickActions vacancyId={vacancy.id} sourceUrl={vacancy.sourceUrl} hideApply={hideApplyActions} />
+                  {!hideApplyActions ? <VacancyAiRetryButton vacancyId={vacancy.id} /> : null}
                   <div className="min-w-56">
                     <VacancyStatusSelect vacancyId={vacancy.id} currentStatus={vacancy.status} />
                   </div>
@@ -201,8 +229,9 @@ function vacancyWhere(status?: string): Prisma.VacancyWhereInput | undefined {
   if (!status) {
     return { status: { notIn: ["invalid_source", "skipped_invalid"] } };
   }
-  if (status === "no_ai") return { OR: [{ matchScore: null }, { aiAnalysisJson: null }] };
+  if (status === "no_ai") return vacancyEligibleForNoAiTab();
   if (status === "ai_recommended") return { status: "ai_recommended" };
+  if (status === "analysis_error") return { status: "analysis_error" };
   if (status === "ready_to_apply") {
     return {
       status: "ready_to_apply",

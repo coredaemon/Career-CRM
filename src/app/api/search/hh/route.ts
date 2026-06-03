@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { AiAnalysisError } from "@/lib/ai-errors";
+import { fromJsonText } from "@/lib/json";
 import { collectHhVacancies, type HhProgressEvent } from "@/lib/hh-search";
 import { prisma } from "@/lib/prisma";
+import { groupSkippedLogMessages } from "@/lib/search-log-grouping";
 import { recalculateSearchRunStats } from "@/lib/search-run-stats";
 import { getUserSettings } from "@/lib/settings";
 import { validateVacancyDraft, validationReasonToLog } from "@/lib/vacancy-validation";
@@ -131,6 +133,11 @@ export async function POST(request: Request) {
           if (event.type === "error") {
             progress.errors += 1;
             errors.push(event.message);
+            await log(event.message, "error");
+            return;
+          }
+          if (event.type === "skipped") {
+            return;
           }
           await log(event.message, event.type === "stage" ? event.stage : event.type);
         };
@@ -165,7 +172,13 @@ export async function POST(request: Request) {
               errorMessage: skipped.errorMessage
             }
           });
-          await log(skipped.errorMessage, "skipped");
+        }
+        const skippedSummaries = groupSkippedLogMessages(collected.skippedItems);
+        for (const line of skippedSummaries.summaryLines) {
+          await log(line, "skipped");
+        }
+        if (collected.skippedItems.length > 0) {
+          await recalculateSearchRunStats(runId);
         }
 
         const newVacancyIds: string[] = [];
@@ -270,10 +283,49 @@ export async function POST(request: Request) {
           }
         }
 
+        const saveSkippedCount = progress.skippedInvalidDescription;
+        await log(
+          `Сбор завершён: карточек ${progress.collectedCards} · дублей ${progress.duplicates} · невалидных ${saveSkippedCount + progress.skippedNotVacancy} · новых ${progress.created}.`,
+          "saving"
+        );
+
+        const eligibleForAi: string[] = [];
         if (body.analyzeAfterCollect && settings.aiConfigured) {
-          progress.analysisQueued = newVacancyIds.length;
-          await log(`Запускаем AI-анализ: ${newVacancyIds.length} вакансий.`, "analyzing_ai");
           for (const vacancyId of newVacancyIds) {
+            const vacancy = await prisma.vacancy.findUnique({
+              where: { id: vacancyId },
+              select: {
+                title: true,
+                rawDescription: true,
+                source: true,
+                sourceUrl: true,
+                status: true,
+                company: { select: { name: true } }
+              }
+            });
+            if (!vacancy) continue;
+            if (["archived", "applied", "invalid_source"].includes(vacancy.status)) continue;
+            const aiValidation = validateVacancyDraft({
+              title: vacancy.title,
+              companyName: vacancy.company?.name,
+              source: vacancy.source,
+              sourceUrl: vacancy.sourceUrl,
+              rawDescription: vacancy.rawDescription
+            });
+            if (!aiValidation.ok) continue;
+            eligibleForAi.push(vacancyId);
+          }
+
+          progress.analysisQueued = eligibleForAi.length;
+          if (eligibleForAi.length === 0) {
+            await log(
+              `К AI отправлено 0: все найденные ссылки были дублями (${progress.duplicates}), служебными (${progress.skippedNotVacancy}) или невалидными.`,
+              "analyzing_ai"
+            );
+          } else {
+            await log(`Запускаем AI-анализ: ${eligibleForAi.length} вакансий.`, "analyzing_ai");
+          }
+          for (const vacancyId of eligibleForAi) {
             const current = await prisma.searchRun.findUnique({ where: { id: runId }, select: { stopRequested: true } });
             if (current?.stopRequested) {
               await log("Остановка запрошена пользователем. AI-анализ остановлен.", "stopped");
@@ -366,32 +418,41 @@ export async function POST(request: Request) {
           await log("AI-анализ включён, но настройки AI не сохранены. Вакансии сохранены без анализа.", "error");
         }
 
+        if (body.analyzeAfterCollect && settings.aiConfigured && eligibleForAi.length > 0) {
+          await log(
+            `Итог AI: отправлено ${progress.sentToAi} · завершено ${progress.analyzed} · ошибок ${progress.analysisErrors} · пропущено ${progress.skippedByAi}.`,
+            "analyzing_ai"
+          );
+        }
+
         const current = await prisma.searchRun.findUnique({ where: { id: runId }, select: { stopRequested: true } });
         const finalStatus = current?.stopRequested || collected.stoppedByUser || collected.stoppedByCaptcha ? "stopped" : "completed";
-        const finished = await prisma.searchRun.update({
-          where: { id: runId },
-          data: {
-            status: finalStatus,
-            stage: finalStatus === "completed" ? "completed" : "stopped",
-            finishedAt: new Date(),
-            totalFound: progress.foundLinks,
-            totalCreated: progress.created,
-            totalDuplicates: progress.duplicates,
-            totalAnalyzed: progress.analyzed,
-            totalErrors: progress.errors,
-            progressJson: JSON.stringify(progress),
-            logJson: JSON.stringify(logs.slice(-250), null, 2),
-            errorLogJson: errors.length ? JSON.stringify(errors, null, 2) : null
-          }
-        });
 
         if (runId) {
           await recalculateSearchRunStats(runId);
         }
 
+        const refreshed = runId
+          ? await prisma.searchRun.findUnique({ where: { id: runId } })
+          : null;
+
+        if (runId && refreshed) {
+          await prisma.searchRun.update({
+            where: { id: runId },
+            data: {
+              status: finalStatus,
+              stage: finalStatus === "completed" ? "completed" : "stopped",
+              finishedAt: new Date(),
+              logJson: JSON.stringify(logs.slice(-250), null, 2),
+              errorLogJson: errors.length ? JSON.stringify(errors, null, 2) : null
+            }
+          });
+        }
+
         await log(finalStatus === "completed" ? "Поиск завершён." : "Поиск остановлен.", finalStatus);
-        const refreshed = runId ? await prisma.searchRun.findUnique({ where: { id: runId } }) : finished;
-        send({ type: "done", run: refreshed ?? finished, progress, errors, stoppedByCaptcha: collected.stoppedByCaptcha });
+        const finalRun = runId ? await prisma.searchRun.findUnique({ where: { id: runId } }) : refreshed;
+        const finalProgress = fromJsonText<ProgressState>(finalRun?.progressJson, progress);
+        send({ type: "done", run: finalRun ?? refreshed, progress: finalProgress, errors, stoppedByCaptcha: collected.stoppedByCaptcha });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Поиск не удался.";
         errors.push(message);

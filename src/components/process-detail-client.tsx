@@ -68,17 +68,19 @@ type Initial = {
   id: string;
   status: string;
   title: string;
+  logs?: ProcessLog[];
 };
 
 export function ProcessDetailClient({ initial }: { initial: Initial }) {
   const router = useRouter();
+  const pollingEnabled = initial.status === "running" || initial.status === "queued";
   const { data } = useProcessPolling<StatusResponse>(`/api/processes/${initial.id}`, {
-    enabled: initial.status === "running" || initial.status === "queued"
+    enabled: pollingEnabled
   });
 
   const state = data?.state;
   const run = data?.run;
-  const logs = data?.logs ?? [];
+  const logs = pollingEnabled ? (data?.logs ?? []) : (data?.logs?.length ? data.logs : initial.logs ?? []);
   const items = data?.items ?? [];
   const diagnostics = data?.diagnostics;
 

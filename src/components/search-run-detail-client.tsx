@@ -5,7 +5,14 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { useProcessPolling } from "@/hooks/use-process-polling";
 import { formatDuration, searchRunStatusLabel, searchStageLabel } from "@/lib/process-status";
-import { searchRunItemStatusLabel } from "@/lib/search-run-stats";
+import { ProcessLogPanel } from "@/components/process-log-panel";
+import { SearchRunItemActions } from "@/components/search-run-item-actions";
+import {
+  computeSearchRunDisplayStats,
+  groupSearchRunItemsForDisplay,
+  searchRunItemStatusLabel
+} from "@/lib/search-run-stats";
+import { listKeyByIndex } from "@/lib/ui-list-keys";
 import { vacancyStatusLabel } from "@/lib/vacancy-status";
 import { Button, Card } from "@/components/ui";
 import { BulkAiAnalyzeButton } from "@/components/bulk-ai-analyze-button";
@@ -86,6 +93,23 @@ export function SearchRunDetailClient({ initial }: { initial: InitialRun }) {
   const isActive = data?.isActive ?? run.status === "running";
   const isStale = data?.isStale ?? run.status === "stale";
 
+  const displayStats = useMemo(
+    () =>
+      computeSearchRunDisplayStats(
+        run.items.map((item) => ({
+          status: item.status,
+          vacancyId: item.vacancy?.id ?? null,
+          errorCode: item.errorCode,
+          vacancy: item.vacancy ? { status: item.vacancy.status, coverLetters: [] } : null
+        })),
+        progress,
+        run
+      ),
+    [run.items, progress, run]
+  );
+  const metrics = displayStats.metrics;
+  const { regular: regularItems, junk: junkItems } = groupSearchRunItemsForDisplay(run.items);
+
   async function markStopped() {
     await fetch(`/api/search/runs/${run.id}/mark-stopped`, { method: "POST" });
     router.refresh();
@@ -132,20 +156,25 @@ export function SearchRunDetailClient({ initial }: { initial: InitialRun }) {
         {isStale ? (
           <p className="mt-3 text-sm text-amber-700">Завис / не обновлялся длительное время. Процесс, вероятно, уже не выполняется.</p>
         ) : null}
+        {displayStats.useDerived ? (
+          <p className="mt-2 text-xs text-amber-300">
+            Сохранённая статистика расходилась с записями прогона — показаны пересчитанные значения. Нажмите «Пересчитать статистику», чтобы обновить в базе.
+          </p>
+        ) : null}
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          <Metric label="Найдено" value={run.totalFound} />
-          <Metric label="Валидных" value={progress.validVacancies ?? run.totalCreated} />
-          <Metric label="Новых" value={run.totalCreated} />
-          <Metric label="Дублей" value={run.totalDuplicates} />
-          <Metric label="Пропущено URL" value={progress.skippedNotVacancy ?? 0} />
-          <Metric label="Плохое описание" value={progress.skippedInvalidDescription ?? 0} />
-          <Metric label="Отправлено в AI" value={progress.sentToAi ?? run.totalAnalyzed} />
-          <Metric label="AI завершено" value={run.totalAnalyzed} />
-          <Metric label="AI ошибок" value={run.totalAnalysisErrors} />
-          <Metric label="Невалидных" value={progress.invalidSource ?? 0} />
-          <Metric label="Рекомендовано" value={run.totalRecommended} />
-          <Metric label="Писем" value={run.totalCoverLetters} />
-          <Metric label="Ошибок" value={run.totalErrors} />
+          <Metric label="Найдено" value={metrics.totalFound} />
+          <Metric label="Валидных" value={metrics.validVacancies} />
+          <Metric label="Новых" value={metrics.totalCreated} />
+          <Metric label="Дублей" value={metrics.totalDuplicates} />
+          <Metric label="Пропущено URL" value={metrics.skippedNotVacancy} />
+          <Metric label="Плохое описание" value={metrics.skippedInvalidDescription} />
+          <Metric label="Отправлено в AI" value={metrics.sentToAi} />
+          <Metric label="AI завершено" value={metrics.totalAnalyzed} />
+          <Metric label="AI ошибок" value={metrics.totalAnalysisErrors} />
+          <Metric label="Невалидных" value={metrics.invalidSource} />
+          <Metric label="Рекомендовано" value={metrics.totalRecommended} />
+          <Metric label="Писем" value={metrics.totalCoverLetters} />
+          <Metric label="Ошибок" value={metrics.totalErrors} />
         </div>
       </Card>
 
@@ -165,8 +194,8 @@ export function SearchRunDetailClient({ initial }: { initial: InitialRun }) {
       {tab === "log" ? (
         <Card>
           <h3 className="font-semibold">Лог процесса</h3>
-          <div className="mt-3 max-h-96 overflow-auto text-sm leading-6">
-            {logs.length === 0 ? <p className="text-[var(--muted)]">Лог пуст.</p> : logs.map((line) => <div key={line}>{line}</div>)}
+          <div className="mt-3">
+            <ProcessLogPanel lines={logs} maxHeightClass="max-h-96" autoScroll={isActive} />
           </div>
         </Card>
       ) : null}
@@ -175,7 +204,23 @@ export function SearchRunDetailClient({ initial }: { initial: InitialRun }) {
         <Card>
           <h3 className="font-semibold">Найденные вакансии</h3>
           <div className="mt-4 grid gap-3">
-            {run.items.map((item) => (
+            {junkItems.length > 0 ? (
+              <details className="rounded-md border border-[var(--line)] p-3 text-sm">
+                <summary className="cursor-pointer font-medium">
+                  Служебные и пропущенные ссылки ({junkItems.length})
+                </summary>
+                <ul className="mt-3 grid gap-2">
+                  {junkItems.map((item) => (
+                    <li key={item.id} className="border-t border-[var(--line)] pt-2 first:border-0 first:pt-0">
+                      <div className="font-medium break-all">{item.sourceUrl}</div>
+                      <div className="mt-1 text-xs text-[var(--muted)]">{searchRunItemStatusLabel(item.status)}</div>
+                      <SearchRunItemActions item={item} />
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+            {regularItems.map((item) => (
               <div key={item.id} className="rounded-md border border-[var(--line)] p-3 text-sm">
                 {item.vacancy ? (
                   <>
@@ -183,17 +228,22 @@ export function SearchRunDetailClient({ initial }: { initial: InitialRun }) {
                       {item.vacancy.title}
                     </Link>
                     <div className="mt-1 text-xs text-[var(--muted)]">
-                      {item.vacancy.companyName || "компания не указана"} · карточка: {searchRunItemStatusLabel(item.status)} · вакансия:{" "}
-                      {vacancyStatusLabel(item.vacancy.status)}
+                      {item.vacancy.companyName || "компания не указана"} · {searchRunItemStatusLabel(item.status)}
                     </div>
+                    <details className="mt-1 text-xs text-[var(--muted)]">
+                      <summary className="cursor-pointer">Подробнее</summary>
+                      <p className="mt-1">Вакансия в CRM: {vacancyStatusLabel(item.vacancy.status)}</p>
+                      <p>status: {item.status}</p>
+                    </details>
                   </>
                 ) : (
                   <div>
-                    <div className="font-medium">{item.sourceUrl}</div>
+                    <div className="font-medium break-all">{item.sourceUrl}</div>
                     <div className="mt-1 text-xs text-[var(--muted)]">{searchRunItemStatusLabel(item.status)}</div>
                   </div>
                 )}
-                {item.errorMessage ? <p className="mt-2 text-xs text-amber-700">{item.errorMessage}</p> : null}
+                {item.errorMessage ? <p className="mt-2 text-xs text-amber-300">{item.errorMessage}</p> : null}
+                <SearchRunItemActions item={item} />
               </div>
             ))}
           </div>
@@ -221,8 +271,8 @@ export function SearchRunDetailClient({ initial }: { initial: InitialRun }) {
             <p className="mt-3 text-sm text-[var(--muted)]">Ошибок нет.</p>
           ) : (
             <ul className="mt-3 grid gap-3 text-sm">
-              {run.errors.map((error) => (
-                <li key={error} className="rounded-md border border-[var(--line)] p-3">
+              {run.errors.map((error, index) => (
+                <li key={listKeyByIndex("run-error", index)} className="rounded-md border border-[var(--line)] p-3">
                   <div className="font-medium">Ошибка сбора или процесса</div>
                   <p className="mt-1 text-[var(--muted)]">{error}</p>
                 </li>

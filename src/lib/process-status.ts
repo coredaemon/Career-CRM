@@ -274,15 +274,19 @@ export function buildSearchRunUiState(
   const progress = options?.progress ?? {};
   const analyzed = Number(progress.analyzed ?? 0);
   const analysisQueued = Number(progress.analysisQueued ?? 0);
+  const sentToAi = Number(progress.sentToAi ?? 0);
+  const analysisErrors = Number(progress.analysisErrors ?? 0);
+  const skippedByAi = Number(progress.skippedByAi ?? 0);
   const queryIndex = run.currentQueryIndex ?? 0;
   const totalQueries = run.totalQueries ?? 0;
 
   let progressCurrent = queryIndex;
   let progressTotal = totalQueries;
   const stage = run.stage ?? "";
-  if (stage === "analyzing_ai" || analysisQueued > 0) {
+  const aiTotal = Math.max(sentToAi, analysisQueued, analyzed + analysisErrors + skippedByAi);
+  if (stage === "analyzing_ai" || analysisQueued > 0 || sentToAi > 0) {
     progressCurrent = analyzed;
-    progressTotal = analysisQueued > 0 ? analysisQueued : progressTotal;
+    progressTotal = aiTotal > 0 ? aiTotal : progressTotal;
   }
 
   const effective = effectiveSearchRunStatus(run.status, run.updatedAt, run.stopRequested);
@@ -293,9 +297,15 @@ export function buildSearchRunUiState(
   const humanStatusLabel = searchRunStatusLabel(run.status, run.updatedAt, run.stopRequested);
   let humanSummary = humanStatusLabel;
   if (effective === "running" || effective === "stopping") {
-    if (stage === "analyzing_ai" && displayTotal > 0) {
-      humanSummary = `AI после поиска: ${displayCurrent} из ${displayTotal}`;
-    } else if (displayTotal > 0) {
+    if (stage === "analyzing_ai") {
+      if (aiTotal > 0) {
+        humanSummary = `AI после поиска: ${displayCurrent} из ${displayTotal}`;
+      } else {
+        const duplicates = Number(progress.duplicates ?? 0);
+        const skippedUrl = Number(progress.skippedNotVacancy ?? 0);
+        humanSummary = `К AI отправлено 0: дублей ${duplicates}, служебных ссылок ${skippedUrl}`;
+      }
+    } else if (displayTotal > 0 && stage !== "analyzing_ai") {
       humanSummary = `Поиск: запрос ${displayCurrent} из ${displayTotal}`;
     } else {
       humanSummary = `Идёт поиск: ${title}`;

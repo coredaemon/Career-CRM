@@ -2,8 +2,10 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { ProcessLogPanel } from "@/components/process-log-panel";
 import { SearchRunProgressPanel } from "@/components/search-run-progress-panel";
 import { Button, Card, Field, inputClass } from "@/components/ui";
+import { listKeyByIndex } from "@/lib/ui-list-keys";
 
 type ProfileOption = {
   id: string;
@@ -20,11 +22,13 @@ type ProgressState = {
   created: number;
   duplicates: number;
   analysisQueued: number;
+  sentToAi?: number;
   analyzed: number;
   errors: number;
   recommended: number;
   needsReview: number;
   skippedByAi: number;
+  skippedNotVacancy?: number;
   coverLetters?: number;
   analysisErrors?: number;
 };
@@ -169,7 +173,8 @@ export function HhSearchForm({ profiles }: { profiles: ProfileOption[] }) {
   }
 
   const collectPercent = Math.min(100, Math.round((progress.collectedCards / Math.max(progress.foundLinks || totalLimit, 1)) * 100));
-  const aiPercent = progress.analysisQueued ? Math.min(100, Math.round((progress.analyzed / progress.analysisQueued) * 100)) : 0;
+  const aiTotal = Math.max(progress.sentToAi || 0, progress.analysisQueued || 0);
+  const aiPercent = aiTotal > 0 ? Math.min(100, Math.round((progress.analyzed / aiTotal) * 100)) : 0;
 
   return (
     <div className="grid gap-6">
@@ -258,13 +263,19 @@ export function HhSearchForm({ profiles }: { profiles: ProfileOption[] }) {
           <Metric label="Карточек собрано" value={progress.collectedCards} />
           <Metric label="Новых вакансий" value={progress.created} />
           <Metric label="Дублей" value={progress.duplicates} />
-          <Metric label="Отправлено в AI" value={progress.analysisQueued} />
+          <Metric label="Отправлено в AI" value={progress.sentToAi ?? progress.analysisQueued} />
           <Metric label="AI завершил" value={progress.analyzed} />
           <Metric label="Рекомендовано" value={progress.recommended} />
           <Metric label="Ошибок" value={progress.errors} />
         </div>
         <ProgressBar label="Прогресс сбора" value={collectPercent} />
-        {analyzeAfterCollect ? <ProgressBar label="Прогресс AI-анализа" value={aiPercent} /> : null}
+        {analyzeAfterCollect && aiTotal > 0 ? <ProgressBar label="Прогресс AI-анализа" value={aiPercent} /> : null}
+        {analyzeAfterCollect && done && aiTotal === 0 && progress.foundLinks > 0 ? (
+          <p className="text-sm text-[var(--muted)]">
+            К AI отправлено 0: найденные ссылки были дублями, служебными или уже проанализированы (дублей: {progress.duplicates},
+            пропущено URL: {progress.skippedNotVacancy ?? 0}).
+          </p>
+        ) : null}
         <div className="flex flex-wrap gap-3">
           <Button onClick={startSearch} disabled={busy || !selectedProfile || queries.length === 0}>
             {busy ? "Поиск выполняется..." : "Запустить поиск"}
@@ -275,13 +286,7 @@ export function HhSearchForm({ profiles }: { profiles: ProfileOption[] }) {
             </Button>
           ) : null}
         </div>
-        <div className="max-h-72 overflow-auto rounded-md border border-[var(--line)] bg-black/5 p-3 text-sm leading-6 dark:bg-white/5">
-          {log.length === 0 ? (
-            <p className="text-[var(--muted)]">Лог появится после запуска.</p>
-          ) : (
-            log.map((item, index) => <div key={`${item}-${index}`}>{item}</div>)
-          )}
-        </div>
+        <ProcessLogPanel lines={log} emptyText="Лог появится после запуска." autoScroll />
       </Card>
 
       {done ? (
@@ -321,8 +326,8 @@ export function HhSearchForm({ profiles }: { profiles: ProfileOption[] }) {
             <details className="mt-5">
               <summary className="cursor-pointer text-sm font-medium">Посмотреть ошибки</summary>
               <ul className="mt-3 grid gap-2 text-sm text-[var(--muted)]">
-                {errors.map((error) => (
-                  <li key={error}>{error}</li>
+                {errors.map((error, index) => (
+                  <li key={listKeyByIndex("search-error", index)}>{error}</li>
                 ))}
               </ul>
             </details>

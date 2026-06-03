@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { ProcessLogPanel } from "@/components/process-log-panel";
 import { useProcessPolling } from "@/hooks/use-process-polling";
 import { Button } from "@/components/ui";
 
@@ -15,6 +16,7 @@ type ProgressState = {
   recommended: number;
   needsReview: number;
   skippedByAi: number;
+  sentToAi?: number;
   coverLetters?: number;
   analysisErrors?: number;
 };
@@ -67,9 +69,10 @@ export function SearchRunProgressPanel({
   const collectCurrent = run?.currentQueryIndex || 0;
   const collectPercent = Math.min(100, Math.round((collectCurrent / collectTotal) * 100));
 
-  const aiTotal = progress?.analysisQueued || 0;
+  const aiTotal = Math.max(progress?.sentToAi || 0, progress?.analysisQueued || 0);
   const aiCurrent = progress?.analyzed || 0;
   const aiPercent = aiTotal > 0 ? Math.min(100, Math.round((aiCurrent / aiTotal) * 100)) : 0;
+  const showAiBar = aiTotal > 0;
 
   return (
     <div className="rounded-md border border-[var(--line)] bg-[var(--soft)] p-4 text-sm">
@@ -88,7 +91,7 @@ export function SearchRunProgressPanel({
               Остановить
             </Button>
           ) : null}
-          <Link href={`/search/runs/${runId}`} className="rounded-md border border-[var(--line)] px-3 py-2 text-xs hover:bg-white">
+          <Link href={`/search/runs/${runId}`} className="rounded-md border border-[var(--line)] px-3 py-2 text-xs hover:bg-[var(--soft)]">
             Открыть детали
           </Link>
         </div>
@@ -96,7 +99,7 @@ export function SearchRunProgressPanel({
 
       <div className="mt-4 grid gap-3">
         <ProgressBar label={`Поиск${run?.currentQueryIndex ? `: запрос ${run.currentQueryIndex} из ${run.totalQueries}` : ""}`} percent={collectPercent} />
-        {aiTotal > 0 ? <ProgressBar label={`AI-анализ: ${aiCurrent} из ${aiTotal}`} percent={aiPercent} /> : null}
+        {showAiBar ? <ProgressBar label={`AI-анализ: ${aiCurrent} из ${aiTotal}`} percent={aiPercent} /> : null}
       </div>
 
       {progress ? (
@@ -113,10 +116,8 @@ export function SearchRunProgressPanel({
       ) : null}
 
       {data?.logs?.length ? (
-        <div className="mt-4 max-h-48 overflow-auto rounded-md border border-[var(--line)] bg-white p-3 text-xs leading-5">
-          {data.logs.slice(-30).map((line) => (
-            <div key={line}>{line}</div>
-          ))}
+        <div className="mt-4">
+          <ProcessLogPanel lines={data.logs.slice(-30)} maxHeightClass="max-h-48" textSizeClass="text-xs" autoScroll />
         </div>
       ) : null}
 
@@ -136,7 +137,7 @@ function ProgressBar({ label, percent }: { label: string; percent: number }) {
         <span>{label}</span>
         <span>{percent}%</span>
       </div>
-      <div className="h-2 overflow-hidden rounded-full bg-white">
+      <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
         <div className="h-full rounded-full bg-[var(--accent)] transition-all" style={{ width: `${percent}%` }} />
       </div>
     </div>

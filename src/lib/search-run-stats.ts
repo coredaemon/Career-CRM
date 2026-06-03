@@ -1,5 +1,24 @@
 import { fromJsonText } from "@/lib/json";
 import { prisma } from "@/lib/prisma";
+import {
+  aggregateSearchRunItems,
+  computeSearchRunDisplayStats,
+  groupSearchRunItemsForDisplay,
+  isSearchRunItemJunk,
+  searchRunItemStatusLabel,
+  type SearchRunItemLike,
+  type SearchRunLike
+} from "@/lib/search-run-stats-core";
+
+export {
+  aggregateSearchRunItems,
+  computeSearchRunDisplayStats,
+  groupSearchRunItemsForDisplay,
+  isSearchRunItemJunk,
+  searchRunItemStatusLabel,
+  type SearchRunItemLike,
+  type SearchRunLike
+};
 
 type ProgressState = {
   foundLinks?: number;
@@ -14,9 +33,13 @@ type ProgressState = {
   skippedInvalidDescription?: number;
   sentToAi?: number;
   invalidSource?: number;
+  validVacancies?: number;
+  analysisQueued?: number;
+  skippedByAi?: number;
+  readyToApply?: number;
+  analysisErrors?: number;
+  coverLetters?: number;
 };
-
-const createdStatuses = new Set(["created", "needs_review", "analyzed", "analysis_error"]);
 
 export async function recalculateSearchRunStats(runId: string) {
   const run = await prisma.searchRun.findUniqueOrThrow({
@@ -33,61 +56,40 @@ export async function recalculateSearchRunStats(runId: string) {
   });
 
   const progress = fromJsonText<ProgressState>(run.progressJson, {});
-  const items = run.items;
+  const errors = fromJsonText<string[]>(run.errorLogJson, []);
+  const stats = aggregateSearchRunItems(run.items, progress, errors.length);
 
-  const totalDuplicates = items.filter((item) => item.status === "duplicate").length;
-  const totalCreated = items.filter((item) => createdStatuses.has(item.status)).length;
-  const totalAnalyzed = items.filter((item) => item.status === "analyzed").length;
-  const totalAnalysisErrors = items.filter((item) => item.status === "analysis_error").length;
-  const skippedNotVacancy = items.filter((item) => item.status === "skipped_not_vacancy").length;
-  const skippedInvalidDescription = items.filter((item) => item.status === "skipped_invalid_description").length;
-
-  const vacancies = items.map((item) => item.vacancy).filter(Boolean);
-  const totalRecommended = vacancies.filter(
-    (vacancy) => vacancy && (vacancy.status === "ai_recommended" || vacancy.status === "ready_to_apply")
-  ).length;
-  const readyToApply = vacancies.filter(
-    (vacancy) => vacancy && vacancy.status === "ready_to_apply" && vacancy.coverLetters.length > 0
-  ).length;
-  const totalCoverLetters = vacancies.reduce((sum, vacancy) => sum + (vacancy?.coverLetters.length || 0), 0);
-  const invalidSource = vacancies.filter((vacancy) => vacancy?.status === "invalid_source").length;
-  const validVacancies = items.filter(
-    (item) => item.status === "created" || item.status === "analyzed" || item.status === "needs_review"
-  ).length;
-
-  const totalFound = Math.max(progress.foundLinks || 0, items.length, run.totalFound);
-  const totalErrors = Math.max(progress.errors || 0, totalAnalysisErrors, run.totalErrors);
-
-  const updatedProgress = {
+  const updatedProgress: ProgressState = {
     ...progress,
-    foundLinks: totalFound,
-    created: totalCreated,
-    duplicates: totalDuplicates,
-    analyzed: totalAnalyzed,
-    errors: totalErrors,
-    recommended: totalRecommended,
-    needsReview: vacancies.filter((v) => v?.status === "needs_review").length,
-    readyToApply,
-    analysisErrors: totalAnalysisErrors,
-    coverLetters: totalCoverLetters,
-    skippedNotVacancy: Math.max(progress.skippedNotVacancy || 0, skippedNotVacancy),
-    skippedInvalidDescription: Math.max(progress.skippedInvalidDescription || 0, skippedInvalidDescription),
-    sentToAi: progress.sentToAi ?? totalAnalyzed,
-    invalidSource: Math.max(progress.invalidSource || 0, invalidSource),
-    validVacancies
+    foundLinks: Math.max(progress.foundLinks || 0, stats.totalFound),
+    created: stats.totalCreated,
+    duplicates: stats.totalDuplicates,
+    analyzed: stats.totalAnalyzed,
+    errors: stats.totalErrors,
+    recommended: stats.totalRecommended,
+    needsReview: stats.needsReview,
+    readyToApply: stats.readyToApply,
+    analysisErrors: stats.totalAnalysisErrors,
+    coverLetters: stats.totalCoverLetters,
+    skippedNotVacancy: stats.skippedNotVacancy,
+    skippedInvalidDescription: stats.skippedInvalidDescription,
+    sentToAi: stats.sentToAi,
+    invalidSource: stats.invalidSource,
+    validVacancies: stats.validVacancies,
+    analysisQueued: Math.max(progress.analysisQueued || 0, stats.sentToAi)
   };
 
   return prisma.searchRun.update({
     where: { id: runId },
     data: {
-      totalFound,
-      totalCreated,
-      totalDuplicates,
-      totalAnalyzed,
-      totalErrors,
-      totalRecommended,
-      totalAnalysisErrors,
-      totalCoverLetters,
+      totalFound: stats.totalFound,
+      totalCreated: stats.totalCreated,
+      totalDuplicates: stats.totalDuplicates,
+      totalAnalyzed: stats.totalAnalyzed,
+      totalErrors: stats.totalErrors,
+      totalRecommended: stats.totalRecommended,
+      totalAnalysisErrors: stats.totalAnalysisErrors,
+      totalCoverLetters: stats.totalCoverLetters,
       progressJson: JSON.stringify(updatedProgress)
     }
   });
@@ -97,17 +99,4 @@ export async function getSearchRunStatsSummary(runId: string) {
   const run = await recalculateSearchRunStats(runId);
   const progress = fromJsonText<ProgressState>(run.progressJson, {});
   return { run, progress };
-}
-
-export function searchRunItemStatusLabel(status: string) {
-  const labels: Record<string, string> = {
-    created: "Сохранена",
-    duplicate: "Дубль",
-    needs_review: "На проверке",
-    analyzed: "AI готово",
-    analysis_error: "Ошибка AI",
-    skipped_not_vacancy: "Не вакансия (URL)",
-    skipped_invalid_description: "Плохое описание"
-  };
-  return labels[status] || status;
 }

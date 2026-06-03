@@ -20,6 +20,7 @@ export type HhProgressEvent =
   | { type: "query"; query: string; queryIndex: number; totalQueries: number; message: string }
   | { type: "links"; foundLinks: number; message: string }
   | { type: "card"; sourceUrl: string; cardIndex: number; totalCards: number; title?: string; message: string }
+  | { type: "skipped"; message: string }
   | { type: "error"; message: string };
 
 export type HhVacancyDraft = {
@@ -79,7 +80,7 @@ export async function collectHhVacancies(params: HhSearchParams): Promise<HhSear
 
   const skipLink = async (item: HhSkippedItem) => {
     skippedItems.push(item);
-    await emit({ type: "error", message: item.errorMessage });
+    await emit({ type: "skipped", message: item.errorMessage });
   };
 
   try {

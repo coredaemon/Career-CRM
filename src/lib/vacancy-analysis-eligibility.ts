@@ -38,3 +38,21 @@ export function isVacancyValidForAnalysis(vacancy: VacancyLike) {
 export function shouldWriteCoverLetterForStatus(status: string) {
   return status === "ai_recommended" || status === "ready_to_apply";
 }
+
+export function vacancyEligibleForNoAiTab(): {
+  status: { notIn: string[] };
+  OR: Array<{ matchScore: null } | { aiAnalysisJson: null }>;
+} {
+  return {
+    status: { notIn: [...BULK_EXCLUDED_STATUSES, "analysis_error"] },
+    OR: [{ matchScore: null }, { aiAnalysisJson: null }]
+  };
+}
+
+export function isVacancyJunkForList(vacancy: VacancyLike & { status: string }) {
+  if (BULK_EXCLUDED_STATUSES.includes(vacancy.status as (typeof BULK_EXCLUDED_STATUSES)[number])) {
+    return true;
+  }
+  const validation = isVacancyValidForAnalysis(vacancy);
+  return !validation.ok;
+}
