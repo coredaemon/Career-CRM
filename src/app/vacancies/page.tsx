@@ -83,7 +83,7 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
           </div>
         }
       />
-      <div className="mb-5 flex flex-wrap gap-2">
+      <div className="mb-2 flex flex-wrap gap-2">
         {tabs.map((tab) => (
           <Link
             key={tab.label}
@@ -96,6 +96,11 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
           </Link>
         ))}
       </div>
+      {tabHint(status) ? (
+        <p className="mb-5 text-sm text-[var(--muted)]">{tabHint(status)}</p>
+      ) : (
+        <div className="mb-5" />
+      )}
 
       {activeSummary.activeVacancyAnalysis ? (
         <Card className="mb-5 border-[var(--accent)]">
@@ -260,16 +265,25 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
   );
 }
 
+function tabHint(status?: string): string {
+  if (status === "ai_recommended") return "Вакансии, которые AI считает подходящими. Для отклика нужно создать письмо.";
+  if (status === "ready_to_apply") return "Здесь вакансии, для которых уже есть письмо. Отклик отправляется вручную на hh.";
+  if (status === "applied") return "Вакансии, по которым вы уже отправили отклик вручную.";
+  if (status === "needs_review") return "Вакансии с неоднозначной оценкой AI. Посмотрите самостоятельно.";
+  if (status === "archived") return "Пропущенные и архивные вакансии.";
+  return "";
+}
+
 function vacancyWhere(status?: string): Prisma.VacancyWhereInput | undefined {
   if (!status) {
-    return { status: { notIn: ["invalid_source", "skipped_invalid"] } };
+    return { status: { notIn: ["invalid_source", "skipped_invalid", "archived", "skipped"] } };
   }
   if (status === "no_ai") return vacancyEligibleForNoAiTab();
-  if (status === "ai_recommended") return { status: "ai_recommended" };
+  if (status === "ai_recommended") return { status: { in: ["ai_recommended", "ready_to_apply"] } };
   if (status === "analysis_error") return { status: "analysis_error" };
-  if (status === "ready_to_apply") {
-    return readyToApplyTabWhere();
-  }
+  if (status === "ready_to_apply") return readyToApplyTabWhere();
+  if (status === "applied") return { status: { in: ["applied", "waiting_response", "no_response"] } };
+  if (status === "archived") return { status: { in: ["archived", "skipped"] } };
   return { status };
 }
 
@@ -277,21 +291,23 @@ function emptyTitle(totalVacancies: number, status?: string, withoutAi?: number,
   if (totalVacancies === 0) return "Вакансий пока нет";
   if (status === "ai_recommended" && withoutAi) return "Рекомендованных пока нет";
   if (status === "no_ai") return "Все вакансии уже проанализированы";
-  if (status === "ready_to_apply" && recommendedWithoutLetter) {
-    return "Есть рекомендованные, но писем ещё нет";
-  }
+  if (status === "ready_to_apply" && recommendedWithoutLetter) return "Есть рекомендованные, но писем ещё нет";
   if (status === "ready_to_apply") return "Пока нет вакансий, готовых к отклику";
+  if (status === "applied") return "Откликов пока нет";
   return "В этой вкладке пока пусто";
 }
 
 function emptyDescription(totalVacancies: number, status?: string, withoutAi?: number, recommendedWithoutLetter?: number) {
   if (totalVacancies === 0) return "Запустите поиск вакансий или добавьте вакансию вручную.";
-  if (status === "ai_recommended" && withoutAi) return "Есть собранные вакансии без AI-анализа. Запустите анализ, чтобы получить рекомендации.";
+  if (status === "ai_recommended" && withoutAi)
+    return "Сначала запустите быстрый AI-анализ — после него появятся рекомендации.";
+  if (status === "ai_recommended" && recommendedWithoutLetter)
+    return "Создайте письма для рекомендованных вакансий, чтобы они появились в «Готово к отклику».";
   if (status === "no_ai") return "Новых вакансий без AI-анализа нет.";
-  if (status === "ready_to_apply" && recommendedWithoutLetter) {
+  if (status === "ready_to_apply" && recommendedWithoutLetter)
     return "Есть рекомендованные вакансии, но для них ещё не созданы сопроводительные письма.";
-  }
   if (status === "ready_to_apply") return "Запустите быстрый AI-анализ, затем создайте письма для рекомендованных.";
+  if (status === "applied") return "После ручной отправки отклика нажмите «Отклик отправлен» на карточке вакансии.";
   return "Попробуйте другой фильтр или запустите AI-анализ для собранных вакансий.";
 }
 

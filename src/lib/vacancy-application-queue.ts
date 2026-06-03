@@ -24,7 +24,15 @@ export function isEligibleForCoverLetter(params: {
   if (params.status === "invalid_source" || params.status === "skipped_invalid" || params.status === "analysis_error") {
     return false;
   }
-  if (params.status === "rejected_by_ai" || params.status === "archived" || params.status === "applied") {
+  if (
+    params.status === "rejected_by_ai" ||
+    params.status === "archived" ||
+    params.status === "applied" ||
+    params.status === "waiting_response" ||
+    params.status === "no_response" ||
+    params.status === "skipped" ||
+    params.status === "rejected"
+  ) {
     return false;
   }
   if (params.status === "ai_recommended" || params.status === "ready_to_apply" || params.status === "needs_review") {
@@ -61,7 +69,18 @@ export function isEligibleForBulkCoverLetter(params: {
 }): boolean {
   if (params.hasLetter) return false;
   if (!params.aiAnalysisJson) return false;
-  if (params.status === "analysis_error" || params.status === "invalid_source" || params.status === "skipped_invalid") {
+  if (
+    params.status === "analysis_error" ||
+    params.status === "invalid_source" ||
+    params.status === "skipped_invalid" ||
+    params.status === "applied" ||
+    params.status === "waiting_response" ||
+    params.status === "no_response" ||
+    params.status === "skipped" ||
+    params.status === "rejected" ||
+    params.status === "rejected_by_ai" ||
+    params.status === "archived"
+  ) {
     return false;
   }
   if (params.status === "ai_recommended" || params.status === "ready_to_apply") return true;
@@ -71,7 +90,7 @@ export function isEligibleForBulkCoverLetter(params: {
 
 export function recommendedWithoutLetterWhere() {
   return {
-    status: { notIn: ["invalid_source", "skipped_invalid", "analysis_error", "archived", "applied", "rejected_by_ai"] },
+    status: { notIn: ["invalid_source", "skipped_invalid", "analysis_error", "archived", "skipped", "applied", "waiting_response", "no_response", "rejected", "rejected_by_ai"] },
     aiAnalysisJson: { not: null },
     coverLetters: { none: {} },
     OR: [

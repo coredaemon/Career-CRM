@@ -4,6 +4,30 @@ import { regenerateCoverLetterWithAi, vacancyAnalysisSchema } from "@/lib/ai";
 import { prisma } from "@/lib/prisma";
 import { getUserSettings } from "@/lib/settings";
 
+const patchSchema = z.object({ text: z.string().min(1) });
+
+export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await params;
+    const { text } = patchSchema.parse(await request.json());
+    const vacancy = await prisma.vacancy.findUniqueOrThrow({
+      where: { id },
+      include: { coverLetters: { orderBy: { createdAt: "desc" }, take: 1 } }
+    });
+    const latest = vacancy.coverLetters[0];
+    if (!latest) {
+      return NextResponse.json({ ok: false, message: "Письмо не найдено." }, { status: 404 });
+    }
+    const updated = await prisma.coverLetter.update({ where: { id: latest.id }, data: { text } });
+    return NextResponse.json({ ok: true, coverLetter: updated });
+  } catch (error) {
+    return NextResponse.json(
+      { ok: false, message: error instanceof Error ? error.message : "Не удалось сохранить правки." },
+      { status: 400 }
+    );
+  }
+}
+
 const regenerateSchema = z.object({
   resumeId: z.string().min(1),
   instruction: z.string().trim().min(1)

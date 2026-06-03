@@ -24,7 +24,7 @@ export const vacancyStatusLabels: Record<VacancyStatus, string> = {
   rejected_by_ai: "AI не рекомендует",
   ready_to_apply: "Готово к отклику",
   applied: "Отклик отправлен",
-  waiting_response: "Ждём ответа",
+  waiting_response: "Ждём ответ",
   rejected: "Отказ",
   no_response: "Нет ответа",
   archived: "Архив",

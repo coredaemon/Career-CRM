@@ -365,13 +365,12 @@ export async function generateCoverLetterWithAi(params: {
 
   const brief = {
     vacancy_title: params.vacancy.title,
-    company: params.vacancy.companyName,
     candidate_strengths: params.analysis.cover_letter_brief.candidate_strengths,
     job_priorities: params.analysis.cover_letter_brief.job_priorities,
     red_flags: params.analysis.red_flags,
     avoid_claims: params.analysis.avoid_claims,
     recommended_cover_letter_focus: params.analysis.recommended_cover_letter_focus,
-    tone: params.instruction || params.analysis.cover_letter_brief.tone
+    style_instruction: params.instruction || params.analysis.cover_letter_brief.tone
   };
 
   const parsed = await parseRouterJson({
@@ -384,16 +383,25 @@ export async function generateCoverLetterWithAi(params: {
       {
         role: "system",
         content:
-          'Ты пишешь короткое сопроводительное письмо на русском языке (3–6 предложений). Не придумывай опыт и навыки — только факты из резюме и подтверждённых фактов. Учитывай red_flags, missing_requirements и avoid_claims: не обещай то, чего нет в резюме. Тон деловой, человечный, без штампов. Верни строгий JSON: {"cover_letter":"..."}.'
+          'Ты пишешь короткое сопроводительное письмо на русском языке (3–5 предложений).\n' +
+          'Структура: приветствие → «Рассматриваю вашу вакансию [title]» → 2–3 ключевые задачи из вакансии → 2–3 факта из резюме кандидата, подтверждённых данными → «Готов обсудить задачи, условия и формат работы».\n' +
+          'Правила:\n' +
+          '- Не упоминай прошлых работодателей и названия компаний — пиши только о задачах и опыте.\n' +
+          '- Не обещай удалёнку, офис, гибрид, командировки или конкретный график — пиши только «готов обсудить условия и формат работы».\n' +
+          '- Не используй пафос: запрещены слова «уникальный», «идеальный», «выдающийся», «лучший», самопиар.\n' +
+          '- Не придумывай опыт — только факты из резюме и confirmedFacts.\n' +
+          '- Учитывай avoid_claims и missing_requirements: не утверждай то, чего нет в резюме.\n' +
+          '- Тон: деловой, спокойный, человечный, без штампов.\n' +
+          'Верни строгий JSON: {"cover_letter":"..."}.'
       },
       {
         role: "user",
         content: `Напиши сопроводительное письмо.
 
-Краткая выжимка:
+Данные вакансии и анализа:
 ${JSON.stringify(brief, null, 2)}
 
-Минимальные факты из резюме:
+Факты из резюме кандидата:
 ${resumeFacts}`
       }
     ]

@@ -164,12 +164,8 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
             {latestLetter ? (
               <>
                 <p className="mt-1 text-sm text-[var(--muted)]">Версия: {latestLetter.style} · резюме: {latestLetter.resume.title}</p>
-                <pre className="mt-4 whitespace-pre-wrap rounded-md border border-[var(--line)] bg-[var(--soft)] p-4 text-sm leading-6">{latestLetter.text}</pre>
-                <div className="mt-4 flex flex-wrap gap-3">
-                  <CopyButton text={latestLetter.text} />
-                </div>
-                <div className="mt-5">
-                  <CoverLetterTools vacancyId={vacancy.id} resumeId={latestLetter.resumeId} />
+                <div className="mt-4">
+                  <CoverLetterTools vacancyId={vacancy.id} resumeId={latestLetter.resumeId} currentText={latestLetter.text} />
                 </div>
               </>
             ) : showCreateLetter ? (
