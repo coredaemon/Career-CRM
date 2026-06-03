@@ -29,6 +29,7 @@ model UserSettings {
   id                  String   @id @default(cuid())
   aiProvider          String?
   aiBaseUrl           String?
+  aiApiKey            String?
   aiPrimaryModel      String?
   aiFastModel         String?
   aiConfigured        Boolean  @default(false)
@@ -87,6 +88,14 @@ model Vacancy {
   matchReasonsJson        String?
   missingRequirementsJson String?
   recommendation          String?
+  nextActionType          String?
+  nextActionAt            DateTime?
+  nextActionNote          String?
+  testRequired            Boolean?
+  testStatus              String?
+  testLink                String?
+  testNotes               String?
+  testCompletedAt         DateTime?
   createdAt               DateTime       @default(now())
   updatedAt               DateTime       @updatedAt
   applications            Application[]

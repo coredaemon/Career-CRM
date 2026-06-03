@@ -20,12 +20,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     ]);
 
     const baseUrl = settings.aiBaseUrl || process.env.AI_BASE_URL || "";
-    const apiKey = process.env.AI_API_KEY || "";
+    const apiKey = settings.aiApiKey || process.env.AI_API_KEY || "";
     const model = settings.aiPrimaryModel || process.env.AI_PRIMARY_MODEL || "";
 
     if (!baseUrl || !apiKey || !model) {
       return NextResponse.json(
-        { ok: false, message: "Для перегенерации нужен AI_BASE_URL, AI_API_KEY и AI_PRIMARY_MODEL в локальном окружении." },
+        { ok: false, message: "Сначала сохраните настройки AI: провайдер, API-ключ и модели." },
         { status: 400 }
       );
     }

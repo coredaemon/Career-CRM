@@ -18,7 +18,14 @@ const analyzeSchema = z.object({
   salaryText: z.string().trim().optional().nullable(),
   location: z.string().trim().optional().nullable(),
   workFormat: z.string().trim().optional().nullable(),
-  rawDescription: z.string().trim().min(50, "Добавьте описание вакансии для анализа")
+  rawDescription: z.string().trim().min(50, "Добавьте текст вакансии для анализа"),
+  nextActionType: z.string().trim().optional().nullable(),
+  nextActionAt: z.string().trim().optional().nullable(),
+  nextActionNote: z.string().trim().optional().nullable(),
+  testRequired: z.boolean().optional().nullable(),
+  testStatus: z.string().trim().optional().nullable(),
+  testLink: z.string().trim().optional().nullable(),
+  testNotes: z.string().trim().optional().nullable()
 });
 
 export async function POST(request: Request) {
@@ -31,12 +38,12 @@ export async function POST(request: Request) {
     ]);
 
     const baseUrl = settings.aiBaseUrl || process.env.AI_BASE_URL || "";
-    const apiKey = process.env.AI_API_KEY || "";
+    const apiKey = settings.aiApiKey || process.env.AI_API_KEY || "";
     const model = settings.aiPrimaryModel || process.env.AI_PRIMARY_MODEL || "";
 
     if (!baseUrl || !apiKey || !model) {
       return NextResponse.json(
-        { ok: false, message: "Для AI-анализа нужен AI_BASE_URL, AI_API_KEY и AI_PRIMARY_MODEL в локальном окружении." },
+        { ok: false, message: "Сначала сохраните настройки AI: провайдер, API-ключ и модели." },
         { status: 400 }
       );
     }
@@ -57,18 +64,16 @@ export async function POST(request: Request) {
             stopWords: fromJsonText<string[]>(profile.stopWordsJson, [])
           }
         : null,
-      vacancy: draft
-        ? {
-            title: draft.title,
-            companyName: draft.companyName || undefined,
-            source: draft.source,
-            sourceUrl: draft.sourceUrl || undefined,
-            salaryText: draft.salaryText || undefined,
-            location: draft.location || undefined,
-            workFormat: draft.workFormat || undefined,
-            rawDescription: draft.rawDescription
-          }
-        : draft
+      vacancy: {
+        title: draft.title,
+        companyName: draft.companyName || undefined,
+        source: draft.source,
+        sourceUrl: draft.sourceUrl || undefined,
+        salaryText: draft.salaryText || undefined,
+        location: draft.location || undefined,
+        workFormat: draft.workFormat || undefined,
+        rawDescription: draft.rawDescription
+      }
     });
 
     if (draft.mode === "analyze_only") {
@@ -91,7 +96,7 @@ export async function POST(request: Request) {
           vacancyId: vacancy.id,
           resumeId: resume.id,
           text: analysis.cover_letter,
-          style: "ai_initial"
+          style: "первое письмо AI"
         }
       });
 
@@ -109,7 +114,7 @@ export async function POST(request: Request) {
             companyId: company?.id ?? null,
             type: "vacancy_analyzed",
             occurredAt: new Date(),
-            summary: `AI-анализ завершён. Score: ${Math.round(analysis.vacancy_match_score)}.`
+            summary: `AI-анализ завершён. Совпадение: ${Math.round(analysis.vacancy_match_score)}.`
           },
           {
             vacancyId: vacancy.id,

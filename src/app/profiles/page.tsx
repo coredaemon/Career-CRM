@@ -12,9 +12,9 @@ export default async function ProfilesPage() {
 
   return (
     <>
-      <PageHeader title="Search Profiles" description="Профили поиска создаются только после анализа резюме и подтверждения пользователем." />
+      <PageHeader title="Профили поиска" description="Профили создаются только после анализа резюме и подтверждения пользователем." />
       {profiles.length === 0 ? (
-        <EmptyState title="Профилей пока нет" description="Пройдите onboarding, чтобы создать первый профиль из текста резюме." />
+        <EmptyState title="Профилей пока нет" description="Пройдите первичную настройку, чтобы создать первый профиль из текста резюме." />
       ) : (
         <div className="grid gap-4">
           {profiles.map((profile) => {
@@ -27,11 +27,11 @@ export default async function ProfilesPage() {
                     <h2 className="text-xl font-semibold tracking-normal">{profile.title}</h2>
                     <p className="mt-1 text-sm text-[var(--muted)]">Из резюме: {profile.resume.title}</p>
                   </div>
-                  <span className="rounded-md border border-[var(--line)] px-3 py-1 text-sm">{profile.status}</span>
+                  <span className="rounded-md border border-[var(--line)] px-3 py-1 text-sm">{profile.status === "active" ? "активен" : profile.status}</span>
                 </div>
                 <p className="mt-4 text-sm leading-6 text-[var(--muted)]">{profile.summary}</p>
-                <Tags title="Roles" items={roles} />
-                <Tags title="Queries" items={queries} />
+                <Tags title="Подходящие роли" items={roles} />
+                <Tags title="Поисковые запросы" items={queries} />
               </Card>
             );
           })}
@@ -48,7 +48,9 @@ function Tags({ title, items }: { title: string; items: string[] }) {
       <h3 className="text-sm font-semibold">{title}</h3>
       <div className="mt-2 flex flex-wrap gap-2">
         {items.map((item) => (
-          <span key={item} className="rounded-md bg-[var(--soft)] px-3 py-1 text-sm text-[var(--muted)]">{item}</span>
+          <span key={item} className="rounded-md bg-[var(--soft)] px-3 py-1 text-sm text-[var(--muted)]">
+            {item}
+          </span>
         ))}
       </div>
     </div>

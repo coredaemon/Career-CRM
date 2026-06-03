@@ -11,6 +11,7 @@ export async function getUserSettings() {
     data: {
       aiProvider: process.env.AI_PROVIDER || "",
       aiBaseUrl: process.env.AI_BASE_URL || "",
+      aiApiKey: process.env.AI_API_KEY || "",
       aiPrimaryModel: process.env.AI_PRIMARY_MODEL || "",
       aiFastModel: process.env.AI_FAST_MODEL || "",
       aiConfigured: false,

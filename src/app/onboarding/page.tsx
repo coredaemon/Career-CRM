@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { AiSettingsPanel } from "@/components/ai-settings-panel";
 import { Button, Card, Field, PageHeader, inputClass } from "@/components/ui";
 
 type Analysis = {
@@ -18,20 +19,14 @@ type Analysis = {
   warnings: string[];
 };
 
-const steps = ["AI Setup", "Резюме", "AI-анализ", "Предложения", "Подтверждение"];
+const steps = ["AI", "Резюме", "Анализ", "Предложения", "Подтверждение"];
 
 export default function OnboardingPage() {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const [ai, setAi] = useState({
-    aiProvider: "openai-compatible",
-    aiBaseUrl: "",
-    aiApiKey: "",
-    aiPrimaryModel: "",
-    aiFastModel: ""
-  });
+  const [aiSaved, setAiSaved] = useState(false);
   const [resumeTitle, setResumeTitle] = useState("Первое резюме");
   const [resumeText, setResumeText] = useState("");
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
@@ -39,32 +34,13 @@ export default function OnboardingPage() {
   const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
   const [selectedQueries, setSelectedQueries] = useState<string[]>([]);
 
-  async function testAi() {
-    setBusy(true);
-    setMessage("");
-    const response = await fetch("/api/settings/ai/test", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(ai)
-    });
-    const data = await response.json();
-    setBusy(false);
-    setMessage(data.message);
-    if (response.ok) setStep(1);
-  }
-
   async function analyzeResume() {
     setBusy(true);
     setMessage("");
     const response = await fetch("/api/resumes/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        resumeText,
-        aiApiKey: ai.aiApiKey,
-        aiBaseUrl: ai.aiBaseUrl,
-        aiPrimaryModel: ai.aiPrimaryModel
-      })
+      body: JSON.stringify({ resumeText })
     });
     const data = await response.json();
     setBusy(false);
@@ -111,7 +87,10 @@ export default function OnboardingPage() {
 
   return (
     <>
-      <PageHeader title="Onboarding" description="Пять шагов: AI, резюме, анализ, предложения и подтверждение первого профиля." />
+      <PageHeader
+        title="Первичная настройка"
+        description="Сначала настроим AI, затем загрузим резюме, проанализируем его и создадим первый профиль поиска."
+      />
       <div className="mb-6 grid gap-2 sm:grid-cols-5">
         {steps.map((label, index) => (
           <div
@@ -126,28 +105,14 @@ export default function OnboardingPage() {
       </div>
 
       {step === 0 ? (
-        <Card className="grid max-w-3xl gap-4">
-          <Field label="Provider">
-            <select className={inputClass} value={ai.aiProvider} onChange={(event) => setAi({ ...ai, aiProvider: event.target.value })}>
-              <option value="openai-compatible">OpenAI-compatible</option>
-              <option value="openai">OpenAI</option>
-              <option value="local">Local compatible endpoint</option>
-            </select>
-          </Field>
-          <Field label="Base URL">
-            <input className={inputClass} value={ai.aiBaseUrl} onChange={(event) => setAi({ ...ai, aiBaseUrl: event.target.value })} placeholder="https://api.openai.com/v1" />
-          </Field>
-          <Field label="API key" hint="Ключ используется для проверки и анализа, но не показывается открытым текстом после сохранения.">
-            <input className={inputClass} type="password" value={ai.aiApiKey} onChange={(event) => setAi({ ...ai, aiApiKey: event.target.value })} />
-          </Field>
-          <Field label="Primary model">
-            <input className={inputClass} value={ai.aiPrimaryModel} onChange={(event) => setAi({ ...ai, aiPrimaryModel: event.target.value })} placeholder="gpt-4.1" />
-          </Field>
-          <Field label="Fast model">
-            <input className={inputClass} value={ai.aiFastModel} onChange={(event) => setAi({ ...ai, aiFastModel: event.target.value })} placeholder="gpt-4.1-mini" />
-          </Field>
-          <Button onClick={testAi} disabled={busy}>{busy ? "Проверяем..." : "Проверить ключ"}</Button>
-        </Card>
+        <div className="grid gap-5">
+          <AiSettingsPanel compact onSaved={() => setAiSaved(true)} />
+          <div className="flex gap-3">
+            <Button onClick={() => setStep(1)} disabled={!aiSaved}>
+              Далее
+            </Button>
+          </div>
+        </div>
       ) : null}
 
       {step === 1 ? (
@@ -156,24 +121,37 @@ export default function OnboardingPage() {
             <input className={inputClass} value={resumeTitle} onChange={(event) => setResumeTitle(event.target.value)} />
           </Field>
           <Field label="Текст резюме">
-            <textarea className={`${inputClass} min-h-80`} value={resumeText} onChange={(event) => setResumeText(event.target.value)} placeholder="Вставьте текст резюме без загрузки PDF/DOCX." />
+            <textarea
+              className={`${inputClass} min-h-80`}
+              value={resumeText}
+              onChange={(event) => setResumeText(event.target.value)}
+              placeholder="Вставьте текст резюме. PDF/DOCX загрузку добавим позже."
+            />
           </Field>
           <div className="flex gap-3">
-            <Button variant="secondary" onClick={() => setStep(0)}>Назад</Button>
-            <Button onClick={() => setStep(2)} disabled={resumeText.trim().length < 200}>Дальше</Button>
+            <Button variant="secondary" onClick={() => setStep(0)}>
+              Назад
+            </Button>
+            <Button onClick={() => setStep(2)} disabled={resumeText.trim().length < 200}>
+              Далее
+            </Button>
           </div>
         </Card>
       ) : null}
 
       {step === 2 ? (
         <Card className="max-w-3xl">
-          <h2 className="text-xl font-semibold tracking-normal">AI-анализ резюме</h2>
+          <h2 className="text-xl font-semibold tracking-normal">Анализ резюме</h2>
           <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-            Анализ строится только по вставленному тексту. Предустановленных направлений поиска в CareerOS нет.
+            CareerOS строит профиль поиска только по тексту вашего резюме. В системе нет заранее вшитых направлений поиска.
           </p>
           <div className="mt-5 flex gap-3">
-            <Button variant="secondary" onClick={() => setStep(1)}>Назад</Button>
-            <Button onClick={analyzeResume} disabled={busy}>{busy ? "Анализируем..." : "Проанализировать резюме"}</Button>
+            <Button variant="secondary" onClick={() => setStep(1)}>
+              Назад
+            </Button>
+            <Button onClick={analyzeResume} disabled={busy}>
+              {busy ? "Анализируем..." : "Проанализировать резюме"}
+            </Button>
           </div>
         </Card>
       ) : null}
@@ -185,19 +163,25 @@ export default function OnboardingPage() {
             <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{analysis.profile_summary}</p>
             <Section title="Сильные стороны" items={analysis.strengths} />
             <Section title="Предложенные направления" items={analysis.possible_directions} />
+            <Section title="Названия вакансий" items={analysis.target_roles} />
+            <Section title="Поисковые запросы" items={analysis.search_queries} />
             <Section title="Стоп-слова" items={analysis.stop_words} />
-            <Section title="Нежелательные сигналы" items={analysis.negative_signals} />
+            <Section title="Нежелательные типы вакансий" items={analysis.negative_signals} />
             <Section title="Предупреждения" items={analysis.warnings} />
           </Card>
           <Card className="grid content-start gap-4">
-            <Field label="Title профиля">
+            <Field label="Название профиля">
               <input className={inputClass} value={profileTitle} onChange={(event) => setProfileTitle(event.target.value)} />
             </Field>
-            <Checklist title="Target roles" items={analysis.target_roles} selected={selectedRoles} onToggle={(item) => toggle(item, selectedRoles, setSelectedRoles)} />
-            <Checklist title="Search queries" items={analysis.search_queries} selected={selectedQueries} onToggle={(item) => toggle(item, selectedQueries, setSelectedQueries)} />
+            <Checklist title="Подходящие роли" items={analysis.target_roles} selected={selectedRoles} onToggle={(item) => toggle(item, selectedRoles, setSelectedRoles)} />
+            <Checklist title="Поисковые запросы" items={analysis.search_queries} selected={selectedQueries} onToggle={(item) => toggle(item, selectedQueries, setSelectedQueries)} />
             <div className="flex gap-3">
-              <Button variant="secondary" onClick={() => setStep(2)}>Назад</Button>
-              <Button onClick={complete} disabled={busy || !profileTitle}>{busy ? "Сохраняем..." : "Сохранить профиль"}</Button>
+              <Button variant="secondary" onClick={() => setStep(2)}>
+                Назад
+              </Button>
+              <Button onClick={complete} disabled={busy || !profileTitle}>
+                {busy ? "Создаём..." : "Создать профиль поиска"}
+              </Button>
             </div>
           </Card>
         </div>
@@ -215,14 +199,26 @@ function Section({ title, items }: { title: string; items: string[] }) {
       <h3 className="text-sm font-semibold">{title}</h3>
       <div className="mt-2 flex flex-wrap gap-2">
         {items.map((item) => (
-          <span key={item} className="rounded-md border border-[var(--line)] px-3 py-1 text-sm text-[var(--muted)]">{item}</span>
+          <span key={item} className="rounded-md border border-[var(--line)] px-3 py-1 text-sm text-[var(--muted)]">
+            {item}
+          </span>
         ))}
       </div>
     </div>
   );
 }
 
-function Checklist({ title, items, selected, onToggle }: { title: string; items: string[]; selected: string[]; onToggle: (item: string) => void }) {
+function Checklist({
+  title,
+  items,
+  selected,
+  onToggle
+}: {
+  title: string;
+  items: string[];
+  selected: string[];
+  onToggle: (item: string) => void;
+}) {
   return (
     <div>
       <h3 className="mb-2 text-sm font-semibold">{title}</h3>

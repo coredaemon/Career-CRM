@@ -4,19 +4,19 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "CareerOS",
-  description: "Local AI Career CRM"
+  description: "Локальная AI-CRM для поиска работы"
 };
 
 const nav = [
-  { href: "/", label: "Dashboard" },
-  { href: "/onboarding", label: "Onboarding" },
-  { href: "/resumes", label: "Resumes" },
-  { href: "/profiles", label: "Profiles" },
-  { href: "/vacancies", label: "Vacancies" },
-  { href: "/companies", label: "Companies" },
-  { href: "/applications", label: "Applications" },
-  { href: "/memory", label: "AI Memory" },
-  { href: "/settings/ai", label: "AI Settings" }
+  { href: "/", label: "Главная" },
+  { href: "/onboarding", label: "Первый запуск" },
+  { href: "/resumes", label: "Резюме" },
+  { href: "/profiles", label: "Профили поиска" },
+  { href: "/vacancies", label: "Вакансии" },
+  { href: "/companies", label: "Компании" },
+  { href: "/applications", label: "Отклики" },
+  { href: "/memory", label: "Память AI" },
+  { href: "/settings/ai", label: "Настройки AI" }
 ];
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
@@ -27,7 +27,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
           <aside className="border-b border-[var(--line)] bg-[var(--panel)] px-5 py-5 lg:min-h-screen lg:border-b-0 lg:border-r">
             <Link href="/" className="block">
               <div className="text-xl font-semibold tracking-normal">CareerOS</div>
-              <div className="mt-1 text-sm text-[var(--muted)]">Local AI Career CRM</div>
+              <div className="mt-1 text-sm text-[var(--muted)]">Локальная AI-CRM для поиска работы</div>
             </Link>
             <nav className="mt-7 grid gap-1">
               {nav.map((item) => (

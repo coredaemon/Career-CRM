@@ -5,7 +5,7 @@ export default function MemoryPage() {
 
   return (
     <>
-      <PageHeader title="AI Memory" description="Раздел подготовлен для будущей подтверждаемой памяти AI." />
+      <PageHeader title="Память AI" description="Раздел подготовлен для будущей подтверждаемой памяти AI." />
       <Card>
         <div className="grid gap-3 md:grid-cols-4">
           {stages.map((stage, index) => (
@@ -16,8 +16,8 @@ export default function MemoryPage() {
           ))}
         </div>
         <p className="mt-5 text-sm leading-6 text-[var(--muted)]">
-          В MVP-1 здесь только структура. Позже CareerOS сможет превращать события поиска в наблюдения, предлагать правила и применять
-          только подтверждённые пользователем правила.
+          В этой версии здесь только структура. Позже CareerOS сможет превращать события поиска в наблюдения, предлагать правила и применять
+          только правила, подтверждённые пользователем.
         </p>
       </Card>
     </>

@@ -20,12 +20,12 @@ export async function POST(request: Request) {
 
     const settings = await getUserSettings();
     const baseUrl = body.aiBaseUrl || settings.aiBaseUrl || process.env.AI_BASE_URL || "";
-    const apiKey = body.aiApiKey || process.env.AI_API_KEY || "";
+    const apiKey = body.aiApiKey || settings.aiApiKey || process.env.AI_API_KEY || "";
     const model = body.aiPrimaryModel || settings.aiPrimaryModel || process.env.AI_PRIMARY_MODEL || "";
 
     if (!baseUrl || !apiKey || !model) {
       return NextResponse.json(
-        { ok: false, message: "Сначала настройте AI: base URL, API key и модель." },
+        { ok: false, message: "Сначала настройте AI: выберите провайдера, проверьте ключ и сохраните модели." },
         { status: 400 }
       );
     }
@@ -40,10 +40,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, analysis });
   } catch (error) {
     return NextResponse.json(
-      {
-        ok: false,
-        message: error instanceof Error ? error.message : "Не удалось проанализировать резюме."
-      },
+      { ok: false, message: error instanceof Error ? error.message : "Не удалось проанализировать резюме." },
       { status: 400 }
     );
   }

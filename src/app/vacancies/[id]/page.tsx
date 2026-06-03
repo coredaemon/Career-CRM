@@ -43,13 +43,14 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
 
   const analysis = fromJsonText<VacancyAnalysisView>(vacancy.aiAnalysisJson, {});
   const latestLetter = vacancy.coverLetters[0];
+  const followUpText = buildFollowUpText(vacancy);
 
   return (
     <>
       <PageHeader
         title={vacancy.title}
         description={`${vacancy.company?.name || "Компания не указана"} · ${vacancyStatusLabel(vacancy.status)}`}
-        action={<LinkButtonGroup vacancyId={vacancy.id} sourceUrl={vacancy.sourceUrl} />}
+        action={<TopActions sourceUrl={vacancy.sourceUrl} />}
       />
       <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
         <div className="grid gap-6">
@@ -58,10 +59,10 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
             <div className="mt-4 grid gap-3 text-sm text-[var(--muted)] sm:grid-cols-2">
               <div>Компания: {vacancy.company?.name || "не указана"}</div>
               <div>Зарплата: {vacancy.salaryText || "не указана"}</div>
-              <div>Локация: {vacancy.location || "не указана"}</div>
-              <div>Формат: {vacancy.workFormat || "не указан"}</div>
-              <div>Источник: {vacancy.source}</div>
-              <div>Профиль: {vacancy.searchProfile?.title || "не выбран"}</div>
+              <div>Город / регион: {vacancy.location || "не указан"}</div>
+              <div>Формат работы: {vacancy.workFormat || "не указан"}</div>
+              <div>Источник: {sourceLabel(vacancy.source)}</div>
+              <div>Профиль поиска: {vacancy.searchProfile?.title || "не выбран"}</div>
             </div>
             {vacancy.sourceUrl ? (
               <p className="mt-4 break-words text-sm">
@@ -84,14 +85,14 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
             <List title="Красные флаги" items={analysis.red_flags} />
             <List title="Неподтверждённые требования" items={analysis.missing_requirements} />
             <TextBlock title="Ракурс резюме" text={analysis.recommended_resume_angle} />
-            <List title="Фокус письма" items={analysis.recommended_cover_letter_focus} />
+            <List title="Фокус сопроводительного письма" items={analysis.recommended_cover_letter_focus} />
             <TextBlock title="Короткое объяснение" text={analysis.reasoning_short} />
-            <TextBlock title="Следующее действие" text={analysis.suggested_next_action} />
+            <TextBlock title="Следующее действие от AI" text={analysis.suggested_next_action} />
             <TextBlock title="Рекомендация" text={vacancy.recommendation} />
           </Card>
 
           <Card>
-            <h2 className="text-xl font-semibold tracking-normal">Сопроводительное</h2>
+            <h2 className="text-xl font-semibold tracking-normal">Сопроводительное письмо</h2>
             {latestLetter ? (
               <>
                 <p className="mt-1 text-sm text-[var(--muted)]">Версия: {latestLetter.style} · резюме: {latestLetter.resume.title}</p>
@@ -109,6 +110,26 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
           </Card>
 
           <Card>
+            <h2 className="text-xl font-semibold tracking-normal">Тестирование</h2>
+            <div className="mt-4 grid gap-3 text-sm text-[var(--muted)] sm:grid-cols-2">
+              <div>Требуется: {vacancy.testRequired ? "да" : "нет"}</div>
+              <div>Статус: {vacancy.testStatus || "не требуется"}</div>
+              <div>Ссылка: {vacancy.testLink || "не указана"}</div>
+              <div>Завершено: {vacancy.testCompletedAt ? vacancy.testCompletedAt.toLocaleDateString("ru-RU") : "не отмечено"}</div>
+            </div>
+            {vacancy.testNotes ? <p className="mt-4 text-sm leading-6 text-[var(--muted)]">{vacancy.testNotes}</p> : null}
+          </Card>
+
+          <Card>
+            <h2 className="text-xl font-semibold tracking-normal">Follow-up</h2>
+            <p className="mt-2 text-sm leading-6 text-[var(--muted)]">Шаблон для ручной отправки. CareerOS ничего не отправляет автоматически.</p>
+            <pre className="mt-4 whitespace-pre-wrap rounded-md border border-[var(--line)] bg-[var(--soft)] p-4 text-sm leading-6">{followUpText}</pre>
+            <div className="mt-4">
+              <CopyButton text={followUpText} label="Скопировать follow-up" />
+            </div>
+          </Card>
+
+          <Card>
             <h2 className="text-xl font-semibold tracking-normal">Компания</h2>
             <p className="mt-3 text-sm text-[var(--muted)]">{vacancy.company?.name || "Компания не указана."}</p>
             {vacancy.company?.website ? <p className="mt-2 text-sm">{vacancy.company.website}</p> : null}
@@ -116,14 +137,14 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
           </Card>
 
           <Card>
-            <h2 className="text-xl font-semibold tracking-normal">История/заметки</h2>
+            <h2 className="text-xl font-semibold tracking-normal">История / заметки</h2>
             <div className="mt-4 grid gap-3">
               {vacancy.interactions.length === 0 ? (
                 <p className="text-sm text-[var(--muted)]">Событий пока нет.</p>
               ) : (
                 vacancy.interactions.map((interaction) => (
                   <div key={interaction.id} className="rounded-md border border-[var(--line)] p-3">
-                    <div className="text-sm font-semibold">{interaction.type}</div>
+                    <div className="text-sm font-semibold">{interactionTypeLabel(interaction.type)}</div>
                     <div className="mt-1 text-xs text-[var(--muted)]">{interaction.occurredAt.toLocaleString("ru-RU")}</div>
                     <p className="mt-2 text-sm text-[var(--muted)]">{interaction.summary}</p>
                   </div>
@@ -138,8 +159,14 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
             <VacancyStatusSelect vacancyId={vacancy.id} currentStatus={vacancy.status} />
           </Card>
           <Card>
-            <h2 className="text-lg font-semibold tracking-normal">Score</h2>
+            <h2 className="text-lg font-semibold tracking-normal">Совпадение</h2>
             <div className="mt-3 text-5xl font-semibold tracking-normal">{vacancy.finalScore ?? vacancy.matchScore ?? "—"}</div>
+          </Card>
+          <Card>
+            <h2 className="text-lg font-semibold tracking-normal">Следующее действие</h2>
+            <p className="mt-3 text-sm text-[var(--muted)]">{vacancy.nextActionType || "не задано"}</p>
+            {vacancy.nextActionAt ? <p className="mt-2 text-sm text-[var(--muted)]">{vacancy.nextActionAt.toLocaleString("ru-RU")}</p> : null}
+            {vacancy.nextActionNote ? <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{vacancy.nextActionNote}</p> : null}
           </Card>
         </aside>
       </div>
@@ -147,16 +174,13 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
   );
 }
 
-function LinkButtonGroup({ vacancyId, sourceUrl }: { vacancyId: string; sourceUrl?: string | null }) {
+function TopActions({ sourceUrl }: { sourceUrl?: string | null }) {
   return (
     <div className="flex flex-wrap gap-2">
       <Link href="/vacancies/new" className="rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white dark:text-black">
         Добавить вакансию
       </Link>
       {sourceUrl ? <CopyButton text={sourceUrl} label="Скопировать ссылку" /> : null}
-      <Link href={`/vacancies/${vacancyId}`} className="rounded-md border border-[var(--line)] px-4 py-2 text-sm">
-        Открыть
-      </Link>
     </div>
   );
 }
@@ -183,4 +207,36 @@ function TextBlock({ title, text }: { title: string; text?: string | null }) {
       <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{text}</p>
     </div>
   );
+}
+
+function sourceLabel(source: string) {
+  if (source === "manual") return "ручной ввод";
+  if (source === "other") return "другой источник";
+  return source;
+}
+
+function interactionTypeLabel(type: string) {
+  const labels: Record<string, string> = {
+    vacancy_created: "Вакансия создана",
+    vacancy_analyzed: "Вакансия проанализирована",
+    cover_letter_created: "Сопроводительное письмо создано",
+    status_changed: "Статус изменён"
+  };
+  return labels[type] ?? type;
+}
+
+function buildFollowUpText(vacancy: {
+  title: string;
+  status: string;
+  testStatus: string | null;
+}) {
+  if (vacancy.testStatus === "пройдено" || vacancy.testStatus === "отправлено") {
+    return `Здравствуйте. Я прошёл тестирование по вакансии «${vacancy.title}». Хотел уточнить, удалось ли его посмотреть и есть ли решение по дальнейшим этапам. Буду благодарен за обратную связь.`;
+  }
+
+  if (vacancy.status === "waiting_response" || vacancy.status === "no_response") {
+    return `Здравствуйте. Недавно направлял отклик на вакансию «${vacancy.title}». Хотел уточнить, актуальна ли ещё позиция и рассматривается ли моё резюме. Буду благодарен за обратную связь.`;
+  }
+
+  return `Здравствуйте. Хотел уточнить статус рассмотрения по вакансии «${vacancy.title}». Буду благодарен за обратную связь.`;
 }

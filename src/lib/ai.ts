@@ -1,11 +1,102 @@
 import { z } from "zod";
 
+export type AiProviderId = "openai" | "deepseek" | "gemini" | "compatible";
+
+export type AiProviderPreset = {
+  id: AiProviderId;
+  title: string;
+  description: string;
+  baseUrl: string;
+  defaultPrimaryModel: string;
+  defaultFastModel: string;
+  enabled: boolean;
+};
+
+export const aiProviderPresets: AiProviderPreset[] = [
+  {
+    id: "openai",
+    title: "OpenAI",
+    description: "Официальный OpenAI API. Подходит для качественного анализа резюме, вакансий и сопроводительных писем.",
+    baseUrl: "https://api.openai.com/v1",
+    defaultPrimaryModel: "gpt-4.1",
+    defaultFastModel: "gpt-4.1-mini",
+    enabled: true
+  },
+  {
+    id: "deepseek",
+    title: "DeepSeek",
+    description: "Экономичный AI-провайдер с OpenAI-совместимым API.",
+    baseUrl: "https://api.deepseek.com/v1",
+    defaultPrimaryModel: "deepseek-chat",
+    defaultFastModel: "deepseek-chat",
+    enabled: true
+  },
+  {
+    id: "gemini",
+    title: "Google Gemini",
+    description: "AI-модели Google. Поддержка отдельного Gemini API будет добавлена позже.",
+    baseUrl: "",
+    defaultPrimaryModel: "",
+    defaultFastModel: "",
+    enabled: false
+  },
+  {
+    id: "compatible",
+    title: "OpenAI-совместимый API",
+    description: "Для OpenRouter, локальных шлюзов и других совместимых сервисов. Подходит опытным пользователям.",
+    baseUrl: "",
+    defaultPrimaryModel: "",
+    defaultFastModel: "",
+    enabled: true
+  }
+];
+
+export function getAiProviderPreset(provider: string) {
+  return aiProviderPresets.find((item) => item.id === provider) ?? aiProviderPresets[0];
+}
+
+export function chooseRecommendedModels(provider: string, models: string[]) {
+  const preset = getAiProviderPreset(provider);
+  const lower = models.map((model) => model.toLowerCase());
+
+  function findModel(candidates: string[]) {
+    for (const candidate of candidates) {
+      const exactIndex = lower.findIndex((model) => model === candidate.toLowerCase());
+      if (exactIndex >= 0) return models[exactIndex];
+    }
+    for (const candidate of candidates) {
+      const fuzzyIndex = lower.findIndex((model) => model.includes(candidate.toLowerCase()));
+      if (fuzzyIndex >= 0) return models[fuzzyIndex];
+    }
+    return "";
+  }
+
+  if (provider === "openai") {
+    return {
+      primary: findModel(["gpt-4.1", "gpt-4o", "gpt-5"]) || preset.defaultPrimaryModel,
+      fast: findModel(["gpt-4.1-mini", "gpt-4o-mini", "mini"]) || preset.defaultFastModel
+    };
+  }
+
+  if (provider === "deepseek") {
+    return {
+      primary: findModel(["deepseek-chat"]) || preset.defaultPrimaryModel,
+      fast: findModel(["deepseek-chat"]) || preset.defaultFastModel
+    };
+  }
+
+  return {
+    primary: models[0] || preset.defaultPrimaryModel,
+    fast: models[1] || models[0] || preset.defaultFastModel
+  };
+}
+
 export const aiSettingsSchema = z.object({
-  aiProvider: z.string().trim().min(1, "Укажите провайдера"),
-  aiBaseUrl: z.string().trim().url("Укажите корректный base URL"),
-  aiApiKey: z.string().trim().min(1, "Укажите API key").optional(),
-  aiPrimaryModel: z.string().trim().min(1, "Укажите primary model"),
-  aiFastModel: z.string().trim().min(1, "Укажите fast model")
+  aiProvider: z.string().trim().min(1, "Выберите провайдера"),
+  aiBaseUrl: z.string().trim().url("Укажите корректный Base URL"),
+  aiApiKey: z.string().trim().min(1, "Укажите API-ключ").optional(),
+  aiPrimaryModel: z.string().trim().min(1, "Выберите основную модель"),
+  aiFastModel: z.string().trim().min(1, "Выберите быструю модель")
 });
 
 export const resumeAnalysisSchema = z.object({
@@ -54,11 +145,19 @@ type ChatRequest = {
   temperature?: number;
 };
 
-function completionsUrl(baseUrl: string) {
+function apiUrl(baseUrl: string, path: string) {
   const trimmed = baseUrl.replace(/\/+$/, "");
-  if (trimmed.endsWith("/chat/completions")) return trimmed;
-  if (trimmed.endsWith("/v1")) return `${trimmed}/chat/completions`;
-  return `${trimmed}/v1/chat/completions`;
+  if (trimmed.endsWith(path)) return trimmed;
+  if (trimmed.endsWith("/v1")) return `${trimmed}${path}`;
+  return `${trimmed}/v1${path}`;
+}
+
+function completionsUrl(baseUrl: string) {
+  return apiUrl(baseUrl, "/chat/completions");
+}
+
+function modelsUrl(baseUrl: string) {
+  return apiUrl(baseUrl, "/models");
 }
 
 async function chatCompletion({ baseUrl, apiKey, model, messages, temperature = 0.2 }: ChatRequest) {
@@ -78,7 +177,7 @@ async function chatCompletion({ baseUrl, apiKey, model, messages, temperature = 
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `AI request failed with status ${response.status}`);
+    throw new Error(text || `AI-провайдер вернул ошибку ${response.status}`);
   }
 
   return response.json() as Promise<{
@@ -86,11 +185,25 @@ async function chatCompletion({ baseUrl, apiKey, model, messages, temperature = 
   }>;
 }
 
+export async function fetchAiModels(params: { baseUrl: string; apiKey: string }) {
+  const response = await fetch(modelsUrl(params.baseUrl), {
+    headers: {
+      Authorization: `Bearer ${params.apiKey}`,
+      "Content-Type": "application/json"
+    }
+  });
+
+  if (!response.ok) return [];
+
+  const data = (await response.json()) as { data?: Array<{ id?: string }> };
+  return (data.data ?? []).map((item) => item.id).filter((id): id is string => Boolean(id)).sort();
+}
+
 export async function testAiConnection(input: z.infer<typeof aiSettingsSchema>) {
   const settings = aiSettingsSchema.parse(input);
 
   if (!settings.aiApiKey) {
-    throw new Error("API key нужен для проверки подключения.");
+    throw new Error("API-ключ нужен для проверки подключения.");
   }
 
   const result = await chatCompletion({
@@ -100,11 +213,11 @@ export async function testAiConnection(input: z.infer<typeof aiSettingsSchema>) 
     messages: [
       {
         role: "system",
-        content: "Return a compact JSON object only."
+        content: "Верни только компактный JSON."
       },
       {
         role: "user",
-        content: "Return {\"ok\":true,\"message\":\"AI configured\"}."
+        content: "Верни {\"ok\":true,\"message\":\"AI настроен\"}."
       }
     ],
     temperature: 0
@@ -112,7 +225,7 @@ export async function testAiConnection(input: z.infer<typeof aiSettingsSchema>) 
 
   const content = result.choices?.[0]?.message?.content;
   if (!content) {
-    throw new Error("AI provider returned an empty response.");
+    throw new Error("AI-провайдер вернул пустой ответ.");
   }
 
   return { ok: true, content };
@@ -132,11 +245,14 @@ export async function analyzeResumeWithAi(params: {
       {
         role: "system",
         content:
-          "You analyze a resume for a local career CRM. Return strict JSON only. Derive every role, direction, query, signal, and warning only from the resume text. Do not inject preset industries, professions, or search directions."
+          "Ты анализируешь резюме для локальной карьерной CRM. Верни строгий JSON. Все роли, направления, запросы, сигналы и предупреждения выводи только из текста резюме. Не добавляй заранее заданные отрасли, профессии или направления поиска."
       },
       {
         role: "user",
-        content: `Analyze this resume text and return JSON with keys: profile_title, profile_summary, strengths, possible_directions, target_roles, search_queries, positive_signals, negative_signals, stop_words, cover_letter_tone, warnings.\n\nResume:\n${params.resumeText}`
+        content: `Проанализируй резюме и верни JSON с ключами: profile_title, profile_summary, strengths, possible_directions, target_roles, search_queries, positive_signals, negative_signals, stop_words, cover_letter_tone, warnings.
+
+Резюме:
+${params.resumeText}`
       }
     ],
     temperature: 0.15
@@ -144,11 +260,10 @@ export async function analyzeResumeWithAi(params: {
 
   const content = result.choices?.[0]?.message?.content;
   if (!content) {
-    throw new Error("AI provider returned an empty resume analysis.");
+    throw new Error("AI-провайдер вернул пустой анализ резюме.");
   }
 
-  const parsed = JSON.parse(content);
-  return resumeAnalysisSchema.parse(parsed);
+  return resumeAnalysisSchema.parse(JSON.parse(content));
 }
 
 export async function analyzeVacancyWithAi(params: {
@@ -184,7 +299,7 @@ export async function analyzeVacancyWithAi(params: {
       {
         role: "system",
         content:
-          "Ты анализируешь вакансию для локальной Career CRM. Отвечай строго JSON на русском языке. Не придумывай опыт кандидата. Используй только факты из резюме. Если требование вакансии не подтверждено резюме, добавь его в missing_requirements. Если вакансия мутная, прямо укажи red_flags. Сопроводительное письмо короткое, деловое, человеческое, без канцелярита и без неподтвержденных фактов. Адаптируй акценты: руководящая роль — управление, самостоятельность, процессы; аналитическая роль — анализ, структурирование, работа с информацией; судебная роль — процессуальные документы, споры, претензионная работа; договорная роль — договоры, риски, контрагенты."
+          "Ты анализируешь вакансию для локальной Career CRM. Отвечай строго JSON на русском языке. Не придумывай опыт кандидата. Используй только факты из резюме. Если требование вакансии не подтверждено резюме, добавь его в missing_requirements. Если вакансия мутная, прямо укажи red_flags. Сопроводительное письмо короткое, деловое, человеческое, без канцелярита и без неподтверждённых фактов. Адаптируй акценты: руководящая роль — управление, самостоятельность, процессы; аналитическая роль — анализ, структурирование, работа с информацией; судебная роль — процессуальные документы, споры, претензионная работа; договорная роль — договоры, риски, контрагенты."
       },
       {
         role: "user",
@@ -205,7 +320,7 @@ ${JSON.stringify(params.vacancy, null, 2)}`
 
   const content = result.choices?.[0]?.message?.content;
   if (!content) {
-    throw new Error("AI provider returned an empty vacancy analysis.");
+    throw new Error("AI-провайдер вернул пустой анализ вакансии.");
   }
 
   return vacancyAnalysisSchema.parse(JSON.parse(content));
@@ -250,7 +365,7 @@ ${JSON.stringify(params.vacancy, null, 2)}`
 
   const content = result.choices?.[0]?.message?.content;
   if (!content) {
-    throw new Error("AI provider returned an empty cover letter.");
+    throw new Error("AI-провайдер вернул пустое письмо.");
   }
 
   return z.object({ cover_letter: z.string().min(1) }).parse(JSON.parse(content)).cover_letter;

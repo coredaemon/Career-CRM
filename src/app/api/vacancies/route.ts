@@ -13,7 +13,14 @@ const vacancyDraftSchema = z.object({
   salaryText: z.string().trim().optional().nullable(),
   location: z.string().trim().optional().nullable(),
   workFormat: z.string().trim().optional().nullable(),
-  rawDescription: z.string().trim().optional().nullable()
+  rawDescription: z.string().trim().optional().nullable(),
+  nextActionType: z.string().trim().optional().nullable(),
+  nextActionAt: z.string().trim().optional().nullable(),
+  nextActionNote: z.string().trim().optional().nullable(),
+  testRequired: z.boolean().optional().nullable(),
+  testStatus: z.string().trim().optional().nullable(),
+  testLink: z.string().trim().optional().nullable(),
+  testNotes: z.string().trim().optional().nullable()
 });
 
 export async function POST(request: Request) {

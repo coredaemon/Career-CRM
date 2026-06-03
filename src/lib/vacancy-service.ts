@@ -13,6 +13,13 @@ export type VacancyDraft = {
   location?: string | null;
   workFormat?: string | null;
   rawDescription?: string | null;
+  nextActionType?: string | null;
+  nextActionAt?: string | null;
+  nextActionNote?: string | null;
+  testRequired?: boolean | null;
+  testStatus?: string | null;
+  testLink?: string | null;
+  testNotes?: string | null;
 };
 
 export async function findOrCreateCompany(companyName?: string | null) {
@@ -44,7 +51,14 @@ export function vacancyCreateData(draft: VacancyDraft, companyId: string | null,
     location: draft.location || null,
     workFormat: draft.workFormat || null,
     rawDescription: draft.rawDescription || null,
-    status
+    status,
+    nextActionType: draft.nextActionType || null,
+    nextActionAt: draft.nextActionAt ? new Date(draft.nextActionAt) : null,
+    nextActionNote: draft.nextActionNote || null,
+    testRequired: draft.testRequired ?? false,
+    testStatus: draft.testStatus || "не требуется",
+    testLink: draft.testLink || null,
+    testNotes: draft.testNotes || null
   };
 }
 

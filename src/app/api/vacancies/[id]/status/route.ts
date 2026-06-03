@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { vacancyStatuses } from "@/lib/vacancy-status";
+import { vacancyStatusLabel, vacancyStatuses } from "@/lib/vacancy-status";
 
 const statusSchema = z.object({
   status: z.enum(vacancyStatuses)
@@ -24,7 +24,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         companyId: vacancy.companyId,
         type: "status_changed",
         occurredAt: new Date(),
-        summary: `Статус изменён: ${previous.status} → ${status}.`
+        summary: `Статус изменён: ${vacancyStatusLabel(previous.status)} → ${vacancyStatusLabel(status)}.`
       }
     });
 

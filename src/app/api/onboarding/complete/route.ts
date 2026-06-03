@@ -64,10 +64,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
     return NextResponse.json(
-      {
-        ok: false,
-        message: error instanceof Error ? error.message : "Не удалось сохранить профиль поиска."
-      },
+      { ok: false, message: error instanceof Error ? error.message : "Не удалось сохранить профиль поиска." },
       { status: 400 }
     );
   }

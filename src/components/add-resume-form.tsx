@@ -33,7 +33,7 @@ export function AddResumeForm() {
     <>
       <Card className="grid gap-4">
         <Field label="Название">
-          <input className={inputClass} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Например: Основное резюме" />
+          <input className={inputClass} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Например: основное резюме" />
         </Field>
         <Field label="Текст резюме">
           <textarea className={`${inputClass} min-h-72`} value={originalText} onChange={(event) => setOriginalText(event.target.value)} />

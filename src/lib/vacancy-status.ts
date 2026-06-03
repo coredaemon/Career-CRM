@@ -37,7 +37,3 @@ export function statusFromAiDecision(decision: "yes" | "maybe" | "no"): VacancyS
   if (decision === "no") return "rejected_by_ai";
   return "needs_review";
 }
-
-export function normalizeVacancyStatus(status: string): string {
-  return status === "rejected_by_ai" ? "rejected_by_ai" : vacancyStatusLabel(status);
-}

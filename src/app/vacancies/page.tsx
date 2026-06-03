@@ -31,7 +31,7 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
   return (
     <>
       <PageHeader
-        title="Vacancies"
+        title="Вакансии"
         description="Ручной список вакансий с AI-разбором, статусами и сопроводительными письмами."
         action={<LinkButton href="/vacancies/new">Добавить вакансию</LinkButton>}
       />
@@ -49,7 +49,7 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
         ))}
       </div>
       {vacancies.length === 0 ? (
-        <EmptyState title="Вакансий пока нет" description="Добавьте вакансию вручную. CareerOS MVP-2 не собирает вакансии автоматически." />
+        <EmptyState title="Вакансий пока нет" description="Добавьте вакансию вручную. CareerOS не собирает вакансии автоматически." />
       ) : (
         <div className="grid gap-4">
           {vacancies.map((vacancy) => {
@@ -63,20 +63,21 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
                       {vacancy.title}
                     </Link>
                     <p className="mt-1 text-sm text-[var(--muted)]">
-                      {vacancy.company?.name || "Компания не указана"} · {vacancy.source}
+                      {vacancy.company?.name || "Компания не указана"} · {sourceLabel(vacancy.source)}
                     </p>
                   </div>
                   <span className="w-fit rounded-md border border-[var(--line)] px-3 py-1 text-sm">{vacancyStatusLabel(vacancy.status)}</span>
                 </div>
                 <div className="mt-4 grid gap-3 text-sm text-[var(--muted)] sm:grid-cols-2 lg:grid-cols-4">
                   <div>{vacancy.salaryText || "Зарплата не указана"}</div>
-                  <div>{vacancy.location || "Локация не указана"}</div>
+                  <div>{vacancy.location || "Город / регион не указан"}</div>
                   <div>{vacancy.workFormat || "Формат не указан"}</div>
-                  <div>Score: {vacancy.matchScore ?? "нет"}</div>
+                  <div>Совпадение: {vacancy.matchScore ?? "нет"}</div>
                 </div>
                 {analysis.summary ? <p className="mt-4 text-sm leading-6 text-[var(--muted)]">{analysis.summary}</p> : null}
                 <div className="mt-4 flex flex-wrap items-center gap-3">
-                  <span className="rounded-md bg-[var(--soft)] px-3 py-1 text-sm">Red flags: {redFlags.length}</span>
+                  <span className="rounded-md bg-[var(--soft)] px-3 py-1 text-sm">Красные флаги: {redFlags.length}</span>
+                  {vacancy.nextActionType ? <span className="rounded-md bg-[var(--soft)] px-3 py-1 text-sm">Действие: {vacancy.nextActionType}</span> : null}
                   <Link href={`/vacancies/${vacancy.id}`} className="rounded-md border border-[var(--line)] px-4 py-2 text-sm hover:bg-[var(--soft)]">
                     Открыть
                   </Link>
@@ -92,4 +93,10 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
       )}
     </>
   );
+}
+
+function sourceLabel(source: string) {
+  if (source === "manual") return "ручной ввод";
+  if (source === "other") return "другой источник";
+  return source;
 }
