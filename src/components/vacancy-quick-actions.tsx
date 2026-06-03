@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { CreateCoverLetterButton } from "@/components/create-cover-letter-button";
 import { CopyButton } from "@/components/copy-button";
+import { SkipVacancyModal } from "@/components/skip-vacancy-modal";
 import { Button } from "@/components/ui";
 
 const APPLIED_STATUSES = new Set(["applied", "waiting_response", "no_response"]);
@@ -14,6 +15,7 @@ type ConfirmState = "idle" | "confirm_with_letter" | "confirm_no_letter";
 
 export function VacancyQuickActions({
   vacancyId,
+  vacancyTitle = "",
   status,
   sourceUrl,
   hasCoverLetter = false,
@@ -24,6 +26,7 @@ export function VacancyQuickActions({
   showOpenLink = true
 }: {
   vacancyId: string;
+  vacancyTitle?: string;
   status: string;
   sourceUrl?: string | null;
   hasCoverLetter?: boolean;
@@ -38,8 +41,9 @@ export function VacancyQuickActions({
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState("");
   const [confirm, setConfirm] = useState<ConfirmState>("idle");
+  const [skipModalOpen, setSkipModalOpen] = useState(false);
 
-  async function run(action: "applied" | "skipped" | "archived" | "check_later") {
+  async function run(action: "applied" | "archived" | "check_later") {
     setBusy(action);
     setToast("");
     setConfirm("idle");
@@ -80,6 +84,12 @@ export function VacancyQuickActions({
     </a>
   ) : null;
 
+  const skipButton = (
+    <Button variant="secondary" onClick={() => setSkipModalOpen(true)} disabled={Boolean(busy)}>
+      Не подходит
+    </Button>
+  );
+
   if (hideApply || status === "invalid_source" || status === "skipped_invalid") {
     return (
       <div className="flex flex-wrap gap-2">
@@ -88,6 +98,14 @@ export function VacancyQuickActions({
         <Button variant="secondary" onClick={() => run("archived")} disabled={Boolean(busy)}>
           В архив
         </Button>
+        {skipModalOpen && (
+          <SkipVacancyModal
+            vacancyId={vacancyId}
+            vacancyTitle={vacancyTitle}
+            onClose={() => setSkipModalOpen(false)}
+            onSkipped={() => { setSkipModalOpen(false); router.refresh(); }}
+          />
+        )}
       </div>
     );
   }
@@ -112,6 +130,15 @@ export function VacancyQuickActions({
       <div className="flex flex-wrap gap-2">
         {openLink}
         {sourceLink}
+        {skipButton}
+        {skipModalOpen && (
+          <SkipVacancyModal
+            vacancyId={vacancyId}
+            vacancyTitle={vacancyTitle}
+            onClose={() => setSkipModalOpen(false)}
+            onSkipped={() => { setSkipModalOpen(false); router.refresh(); }}
+          />
+        )}
       </div>
     );
   }
@@ -146,15 +173,21 @@ export function VacancyQuickActions({
             <Button variant="secondary" onClick={() => run("check_later")} disabled={Boolean(busy)}>
               Проверить позже
             </Button>
-            <Button variant="secondary" onClick={() => run("skipped")} disabled={Boolean(busy)}>
-              Пропустить
-            </Button>
+            {skipButton}
             <Button variant="secondary" onClick={() => run("archived")} disabled={Boolean(busy)}>
               В архив
             </Button>
           </div>
         )}
         {toast ? <p className="text-sm text-green-700 dark:text-green-400">{toast}</p> : null}
+        {skipModalOpen && (
+          <SkipVacancyModal
+            vacancyId={vacancyId}
+            vacancyTitle={vacancyTitle}
+            onClose={() => setSkipModalOpen(false)}
+            onSkipped={() => { setSkipModalOpen(false); router.refresh(); }}
+          />
+        )}
       </div>
     );
   }
@@ -166,14 +199,20 @@ export function VacancyQuickActions({
           {openLink}
           {sourceLink}
           <CreateCoverLetterButton vacancyId={vacancyId} resumeId={resumeId} label="Создать письмо" compact />
-          <Button variant="secondary" onClick={() => run("skipped")} disabled={Boolean(busy)}>
-            Пропустить
-          </Button>
+          {skipButton}
           <Button variant="secondary" onClick={() => run("archived")} disabled={Boolean(busy)}>
             В архив
           </Button>
         </div>
         {toast ? <p className="text-sm text-[var(--muted)]">{toast}</p> : null}
+        {skipModalOpen && (
+          <SkipVacancyModal
+            vacancyId={vacancyId}
+            vacancyTitle={vacancyTitle}
+            onClose={() => setSkipModalOpen(false)}
+            onSkipped={() => { setSkipModalOpen(false); router.refresh(); }}
+          />
+        )}
       </div>
     );
   }
@@ -185,9 +224,18 @@ export function VacancyQuickActions({
         <Button variant="secondary" onClick={() => run("check_later")} disabled={Boolean(busy)}>
           Оставить на проверку
         </Button>
+        {skipButton}
         <Button variant="secondary" onClick={() => run("archived")} disabled={Boolean(busy)}>
           В архив
         </Button>
+        {skipModalOpen && (
+          <SkipVacancyModal
+            vacancyId={vacancyId}
+            vacancyTitle={vacancyTitle}
+            onClose={() => setSkipModalOpen(false)}
+            onSkipped={() => { setSkipModalOpen(false); router.refresh(); }}
+          />
+        )}
       </div>
     );
   }
@@ -224,14 +272,20 @@ export function VacancyQuickActions({
             {busy === "applied" ? "Отмечаем..." : "Отклик отправлен"}
           </Button>
         ) : null}
-        <Button variant="secondary" onClick={() => run("skipped")} disabled={Boolean(busy)}>
-          Пропустить
-        </Button>
+        {skipButton}
         <Button variant="secondary" onClick={() => run("archived")} disabled={Boolean(busy)}>
           В архив
         </Button>
       </div>
       {toast ? <p className="text-sm text-[var(--muted)]">{toast}</p> : null}
+      {skipModalOpen && (
+        <SkipVacancyModal
+          vacancyId={vacancyId}
+          vacancyTitle={vacancyTitle}
+          onClose={() => setSkipModalOpen(false)}
+          onSkipped={() => { setSkipModalOpen(false); router.refresh(); }}
+        />
+      )}
     </div>
   );
 }

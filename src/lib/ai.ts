@@ -4,6 +4,15 @@ import { type AiRouterContext, callAiRouter, logAiCallError, logAiCallSuccess } 
 import { chooseModelForRole, providerPresets } from "@/lib/ai-presets";
 import { extractJsonFromAiResponse } from "@/lib/extract-json";
 
+const resumeMatchBasisSchema = z.object({
+  matched_requirements: z.array(z.string()).default([]),
+  unsupported_requirements: z.array(z.string()).default([]),
+  specialized_requirements_not_in_resume: z.array(z.string()).default([]),
+  recommendation_reason: z.string().default("")
+});
+
+export type ResumeMatchBasis = z.infer<typeof resumeMatchBasisSchema>;
+
 export const aiProviderPresets = [
   {
     id: "openai",
@@ -93,6 +102,13 @@ export const vacancyAnalysisSchema = z.object({
   suggested_next_action: z.string().default(""),
   questions_to_clarify: z.array(z.string()).default([]),
   avoid_claims: z.array(z.string()).default([]),
+  salary_expectations_requested: z.boolean().default(false),
+  resume_match_basis: resumeMatchBasisSchema.default({
+    matched_requirements: [],
+    unsupported_requirements: [],
+    specialized_requirements_not_in_resume: [],
+    recommendation_reason: ""
+  }),
   cover_letter_brief: z
     .object({
       candidate_strengths: z.array(z.string()).default([]),
@@ -227,6 +243,9 @@ export async function analyzeVacancyWithAi(params: {
   signal?: AbortSignal;
   onProgress?: (message: string) => void | Promise<void>;
   forceFallbackProvider?: "openai";
+  salaryExpectations?: { min?: number | null; max?: number | null; preferredText?: string | null; isNet?: boolean | null } | null;
+  acceptedObservations?: Array<{ description: string; suggestedRule?: string | null }> | null;
+  narrowSpecializationRules?: string[] | null;
 }) {
   const { runVacancyAnalysisPipeline } = await import("@/lib/vacancy-analysis-pipeline");
   const result = await runVacancyAnalysisPipeline({
@@ -237,7 +256,10 @@ export async function analyzeVacancyWithAi(params: {
     context: params.context,
     signal: params.signal,
     onProgress: params.onProgress,
-    forceFallbackProvider: params.forceFallbackProvider
+    forceFallbackProvider: params.forceFallbackProvider,
+    salaryExpectations: params.salaryExpectations,
+    acceptedObservations: params.acceptedObservations,
+    narrowSpecializationRules: params.narrowSpecializationRules
   });
   return {
     analysis: result.analysis,
@@ -355,6 +377,9 @@ export async function generateCoverLetterWithAi(params: {
   analysis: VacancyAnalysis;
   instruction?: string;
   context?: AiRouterContext;
+  salaryExpectationsRequested?: boolean;
+  salaryExpectationPreferredText?: string | null;
+  overrideSalaryText?: string | null;
 }) {
   const resumeFacts = [
     params.resumeText.slice(0, 2500),
@@ -367,11 +392,34 @@ export async function generateCoverLetterWithAi(params: {
     vacancy_title: params.vacancy.title,
     candidate_strengths: params.analysis.cover_letter_brief.candidate_strengths,
     job_priorities: params.analysis.cover_letter_brief.job_priorities,
+    matched_requirements: params.analysis.resume_match_basis?.matched_requirements ?? [],
     red_flags: params.analysis.red_flags,
     avoid_claims: params.analysis.avoid_claims,
+    unsupported_requirements: params.analysis.resume_match_basis?.unsupported_requirements ?? [],
     recommended_cover_letter_focus: params.analysis.recommended_cover_letter_focus,
     style_instruction: params.instruction || params.analysis.cover_letter_brief.tone
   };
+
+  const salaryRequested =
+    params.overrideSalaryText !== undefined
+      ? params.overrideSalaryText !== null
+      : (params.salaryExpectationsRequested ?? params.analysis.salary_expectations_requested ?? false);
+
+  const salaryText =
+    params.overrideSalaryText !== undefined
+      ? params.overrideSalaryText
+      : (params.salaryExpectationPreferredText ?? null);
+
+  let salaryInstruction = "";
+  if (salaryRequested) {
+    if (salaryText) {
+      salaryInstruction =
+        `\n- Работодатель просит указать зарплатные ожидания. Добавь в конец письма фразу: «${salaryText}»`;
+    } else {
+      salaryInstruction =
+        "\n- Работодатель просит указать зарплатные ожидания. Добавь фразу: «Готов обсудить задачи, условия и зарплатные ожидания.» — не придумывай сумму.";
+    }
+  }
 
   const parsed = await parseRouterJson({
     role: "writer",
@@ -386,13 +434,15 @@ export async function generateCoverLetterWithAi(params: {
           'Ты пишешь короткое сопроводительное письмо на русском языке (3–5 предложений).\n' +
           'Структура: приветствие → «Рассматриваю вашу вакансию [title]» → 2–3 ключевые задачи из вакансии → 2–3 факта из резюме кандидата, подтверждённых данными → «Готов обсудить задачи, условия и формат работы».\n' +
           'Правила:\n' +
+          '- Используй только matched_requirements и candidate_strengths — факты, подтверждённые резюме.\n' +
+          '- Не используй unsupported_requirements и не утверждай опыт из avoid_claims.\n' +
           '- Не упоминай прошлых работодателей и названия компаний — пиши только о задачах и опыте.\n' +
           '- Не обещай удалёнку, офис, гибрид, командировки или конкретный график — пиши только «готов обсудить условия и формат работы».\n' +
           '- Не используй пафос: запрещены слова «уникальный», «идеальный», «выдающийся», «лучший», самопиар.\n' +
           '- Не придумывай опыт — только факты из резюме и confirmedFacts.\n' +
-          '- Учитывай avoid_claims и missing_requirements: не утверждай то, чего нет в резюме.\n' +
-          '- Тон: деловой, спокойный, человечный, без штампов.\n' +
-          'Верни строгий JSON: {"cover_letter":"..."}.'
+          '- Тон: деловой, спокойный, человечный, без штампов.' +
+          salaryInstruction +
+          '\nВерни строгий JSON: {"cover_letter":"..."}.'
       },
       {
         role: "user",

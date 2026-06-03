@@ -19,9 +19,11 @@ import { AI_TIMEOUT_MS_FAST, AI_TIMEOUT_MS_FULL } from "@/lib/process-status";
 import {
   fastVacancyAnalysisSchema,
   FULL_ANALYSIS_SCHEMA_DESCRIPTION,
+  FULL_ANALYSIS_SCHEMA_JSON_DESCRIPTION,
   FAST_ANALYSIS_SCHEMA_DESCRIPTION,
   normalizeFastAnalysis
 } from "@/lib/vacancy-analysis-schemas";
+import { NARROW_SPECIALIZATION_RULES } from "@/lib/narrow-specializations";
 
 type ChatMessage = {
   role: "system" | "user" | "assistant";
@@ -45,6 +47,13 @@ export type AnalysisPipelineResult = {
   };
 };
 
+export type SalaryExpectations = {
+  min?: number | null;
+  max?: number | null;
+  preferredText?: string | null;
+  isNet?: boolean | null;
+};
+
 type PipelineParams = {
   mode: AnalysisPipelineMode;
   resumeText: string;
@@ -54,6 +63,9 @@ type PipelineParams = {
   signal?: AbortSignal;
   onProgress?: (message: string) => void | Promise<void>;
   forceFallbackProvider?: "openai";
+  salaryExpectations?: SalaryExpectations | null;
+  acceptedObservations?: Array<{ description: string; suggestedRule?: string | null }> | null;
+  narrowSpecializationRules?: string[] | null;
 };
 
 function providerLabel(provider: string) {
@@ -62,12 +74,60 @@ function providerLabel(provider: string) {
   return provider;
 }
 
+function buildContextSection(params: PipelineParams): string {
+  const sections: string[] = [];
+
+  const rules = params.narrowSpecializationRules ?? NARROW_SPECIALIZATION_RULES;
+  sections.push(
+    `\nПравила скоринга (ОБЯЗАТЕЛЬНО):\n` +
+    `- Если вакансия требует как ОСНОВНОЙ профиль узкую специализацию из списка ниже, которая явно отсутствует в резюме: score ≤ 45, should_apply = "no", указать специализацию в specialized_requirements_not_in_resume.\n` +
+    `- Если 1–2 ключевых требования не подтверждены резюме: score не выше 65, should_apply = "maybe".\n` +
+    `- Если 3+ ключевых требования не подтверждены резюме: score не выше 45, should_apply = "no".\n` +
+    `- Если вакансия совпадает по основному профилю с резюме: score 70+, should_apply = "yes" или "maybe".\n` +
+    `\nСписок узких специализаций:\n${rules.map((r) => `  - ${r}`).join("\n")}`
+  );
+
+  const salary = params.salaryExpectations;
+  if (salary?.min || salary?.max) {
+    const net = salary.isNet !== false ? " (после вычета налогов)" : " (gross)";
+    const range = [salary.min && `от ${salary.min.toLocaleString("ru")} ₽`, salary.max && `до ${salary.max.toLocaleString("ru")} ₽`]
+      .filter(Boolean)
+      .join(" ");
+    sections.push(
+      `\nЗарплатные ожидания кандидата: ${range}${net}.\n` +
+      `- Если salaryText вакансии явно ниже ${salary.min ?? 0} ₽ — добавить в red_flags "Зарплата ниже ожиданий кандидата" и снизить score.\n` +
+      `- Если salaryText отсутствует — добавить в red_flags "Зарплата не указана", вакансию не отбрасывать.\n` +
+      `- Если salaryText в диапазоне ожиданий — это положительный сигнал, не добавлять в red_flags.`
+    );
+  } else {
+    sections.push(
+      `\n- Если salaryText отсутствует — добавить в red_flags "Зарплата не указана", вакансию не отбрасывать автоматически.`
+    );
+  }
+
+  sections.push(
+    `\n- Если в тексте вакансии есть фразы вроде "укажите зарплатные ожидания", "ожидаемый уровень дохода", "зарплатные ожидания" — выставить salary_expectations_requested = true.`
+  );
+
+  const obs = params.acceptedObservations;
+  if (obs && obs.length > 0) {
+    const lines = obs
+      .map((o) => `  - ${o.suggestedRule ?? o.description}`)
+      .join("\n");
+    sections.push(`\nПодтверждённые пользовательские правила (применять при анализе):\n${lines}`);
+  }
+
+  return sections.join("\n");
+}
+
 function buildFastMessages(params: PipelineParams): ChatMessage[] {
+  const contextSection = buildContextSection(params);
   return [
     {
       role: "system",
       content:
-        "Ты аналитический JSON-обработчик для CareerOS. Верни только валидный JSON на русском языке. Не придумывай опыт кандидата. Используй только факты из резюме и вакансии. Максимум 3 пункта в каждом массиве. Без сопроводительного письма и без длинных рассуждений."
+        "Ты аналитический JSON-обработчик для CareerOS. Верни только валидный JSON на русском языке. Не придумывай опыт кандидата. Используй только факты из резюме и вакансии. Максимум 3 пункта в каждом массиве. Без сопроводительного письма и без длинных рассуждений." +
+        contextSection
     },
     {
       role: "user",
@@ -87,15 +147,18 @@ ${JSON.stringify(params.vacancy, null, 2)}`
 }
 
 function buildFullMessages(params: PipelineParams): ChatMessage[] {
+  const contextSection = buildContextSection(params);
   return [
     {
       role: "system",
       content:
-        "Ты аналитический JSON-обработчик для CareerOS. Верни только валидный JSON на русском языке. Не придумывай опыт кандидата. Используй только факты из резюме и вакансии. Если требование не подтверждено резюме, добавь его в missing_requirements. Если вакансия мутная, прямо укажи red_flags. Не пиши сопроводительное письмо."
+        "Ты аналитический JSON-обработчик для CareerOS. Верни только валидный JSON на русском языке. Не придумывай опыт кандидата. Используй только факты из резюме и вакансии. Если требование не подтверждено резюме, добавь его в missing_requirements. Если вакансия мутная, прямо укажи red_flags. Не пиши сопроводительное письмо." +
+        contextSection
     },
     {
       role: "user",
-      content: `Верни JSON с ключами: ${FULL_ANALYSIS_SCHEMA_DESCRIPTION}
+      content: `Верни JSON строго по схеме:
+${FULL_ANALYSIS_SCHEMA_JSON_DESCRIPTION}
 
 Резюме:
 ${params.resumeText.slice(0, 3000)}

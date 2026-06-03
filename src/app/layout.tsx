@@ -20,6 +20,7 @@ const nav = [
   { href: "/companies", label: "Компании" },
   { href: "/applications", label: "Отклики" },
   { href: "/memory", label: "Память AI" },
+  { href: "/settings/profile", label: "Ожидания" },
   { href: "/settings/ai", label: "Настройки AI" }
 ];
 

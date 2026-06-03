@@ -50,6 +50,9 @@ export function statusFromAiAnalysis(params: {
 }): VacancyStatus {
   if (params.shouldApply === "no") return "rejected_by_ai";
   if (params.shouldApply === "yes") return "ready_to_apply";
+  // maybe
   if (params.score >= 75) return "ai_recommended";
-  return "needs_review";
+  if (params.score >= 50) return "needs_review";
+  // score < 50 + maybe means AI is uncertain but score is low — treat as not recommended
+  return "rejected_by_ai";
 }

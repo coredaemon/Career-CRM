@@ -42,10 +42,14 @@ model UserSettings {
   writerApiKey        String?
   writerModel         String?
   reviewerModel       String?
-  aiConfigured        Boolean  @default(false)
-  onboardingCompleted Boolean  @default(false)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  aiConfigured                  Boolean  @default(false)
+  onboardingCompleted           Boolean  @default(false)
+  salaryExpectationMin          Int?
+  salaryExpectationMax          Int?
+  salaryExpectationPreferredText String?
+  salaryExpectationNet          Boolean? @default(true)
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
 }
 
 model Resume {
@@ -116,6 +120,7 @@ model Vacancy {
   testCompletedAt         DateTime?
   analysisErrorCode       String?
   analysisErrorMessage    String?
+  skipReasonJson          String?
   createdAt               DateTime       @default(now())
   updatedAt               DateTime       @updatedAt
   applications            Application[]

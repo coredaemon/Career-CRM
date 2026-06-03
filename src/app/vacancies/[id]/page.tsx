@@ -18,6 +18,13 @@ import { vacancyStatusLabel } from "@/lib/vacancy-status";
 
 export const dynamic = "force-dynamic";
 
+type ResumeMatchBasisView = {
+  matched_requirements?: string[];
+  unsupported_requirements?: string[];
+  specialized_requirements_not_in_resume?: string[];
+  recommendation_reason?: string;
+};
+
 type VacancyAnalysisView = {
   summary?: string;
   confidence?: string;
@@ -29,6 +36,8 @@ type VacancyAnalysisView = {
   recommended_cover_letter_focus?: string[];
   reasoning_short?: string;
   suggested_next_action?: string;
+  salary_expectations_requested?: boolean;
+  resume_match_basis?: ResumeMatchBasisView;
 };
 
 export default async function VacancyDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -133,6 +142,14 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
             </pre>
           </Card>
 
+          {analysis.salary_expectations_requested ? (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+              Работодатель просит указать зарплатные ожидания. Если вы создадите сопроводительное письмо,
+              CareerOS добавит вашу формулировку из{" "}
+              <a href="/settings/profile" className="underline">настроек</a>.
+            </div>
+          ) : null}
+
           <Card>
             <h2 className="text-xl font-semibold tracking-normal">AI-разбор</h2>
             <div className="mt-4 text-4xl font-semibold tracking-normal">{vacancy.matchScore ?? "—"}</div>
@@ -157,6 +174,7 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
             <TextBlock title="Короткое объяснение" text={analysis.reasoning_short} />
             <TextBlock title="Следующее действие от AI" text={analysis.suggested_next_action} />
             <TextBlock title="Рекомендация" text={vacancy.recommendation} />
+            <ResumeMatchBasisBlock basis={analysis.resume_match_basis} />
           </Card>
 
           <Card>
@@ -233,6 +251,7 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
             <h2 className="mb-3 text-lg font-semibold tracking-normal">Быстрые действия</h2>
             <VacancyQuickActions
               vacancyId={vacancy.id}
+              vacancyTitle={vacancy.title}
               status={vacancy.status}
               sourceUrl={vacancy.sourceUrl}
               hasCoverLetter={Boolean(latestLetter)}
@@ -316,7 +335,50 @@ function interactionTypeLabel(type: string) {
     vacancy_analyzed: "Вакансия проанализирована",
     cover_letter_created: "Сопроводительное письмо создано",
     status_changed: "Статус изменён",
-    application_sent_manually: "Отклик отправлен вручную"
+    application_sent_manually: "Отклик отправлен вручную",
+    vacancy_rejected_by_user: "Вакансия отклонена пользователем"
   };
   return labels[type] ?? type;
+}
+
+function ResumeMatchBasisBlock({ basis }: { basis?: ResumeMatchBasisView }) {
+  if (!basis) return null;
+  const hasContent =
+    (basis.matched_requirements?.length ?? 0) > 0 ||
+    (basis.unsupported_requirements?.length ?? 0) > 0 ||
+    (basis.specialized_requirements_not_in_resume?.length ?? 0) > 0 ||
+    basis.recommendation_reason;
+  if (!hasContent) return null;
+  return (
+    <div className="mt-6 rounded-lg border border-[var(--line)] p-4">
+      <h3 className="text-sm font-semibold">Почему AI так решил</h3>
+      {(basis.matched_requirements?.length ?? 0) > 0 && (
+        <div className="mt-3">
+          <div className="text-xs font-medium text-green-700 dark:text-green-400">Совпадает с резюме</div>
+          <ul className="mt-1 grid gap-1 text-sm text-[var(--muted)]">
+            {basis.matched_requirements!.map((r) => <li key={r}>✓ {r}</li>)}
+          </ul>
+        </div>
+      )}
+      {(basis.unsupported_requirements?.length ?? 0) > 0 && (
+        <div className="mt-3">
+          <div className="text-xs font-medium text-amber-600 dark:text-amber-400">Не подтверждено резюме</div>
+          <ul className="mt-1 grid gap-1 text-sm text-[var(--muted)]">
+            {basis.unsupported_requirements!.map((r) => <li key={r}>? {r}</li>)}
+          </ul>
+        </div>
+      )}
+      {(basis.specialized_requirements_not_in_resume?.length ?? 0) > 0 && (
+        <div className="mt-3">
+          <div className="text-xs font-medium text-red-600 dark:text-red-400">Узкие требования не найдены в резюме</div>
+          <ul className="mt-1 grid gap-1 text-sm text-[var(--muted)]">
+            {basis.specialized_requirements_not_in_resume!.map((r) => <li key={r}>✗ {r}</li>)}
+          </ul>
+        </div>
+      )}
+      {basis.recommendation_reason && (
+        <p className="mt-3 text-sm text-[var(--muted)]">{basis.recommendation_reason}</p>
+      )}
+    </div>
+  );
 }

@@ -30,7 +30,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
 const regenerateSchema = z.object({
   resumeId: z.string().min(1),
-  instruction: z.string().trim().min(1)
+  instruction: z.string().trim().min(1),
+  overrideSalaryText: z.string().nullable().optional()
 });
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -65,7 +66,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         companyName: vacancy.company?.name,
         rawDescription: vacancy.rawDescription,
         aiAnalysisJson: vacancy.aiAnalysisJson
-      }
+      },
+      salaryExpectationsRequested: analysis.salary_expectations_requested,
+      salaryExpectationPreferredText: settings.salaryExpectationPreferredText,
+      overrideSalaryText: body.overrideSalaryText
     });
 
     const coverLetter = await prisma.coverLetter.create({

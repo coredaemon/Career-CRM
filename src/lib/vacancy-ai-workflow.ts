@@ -16,6 +16,7 @@ import { AiAnalysisError, INVALID_VACANCY_SOURCE_MESSAGE } from "@/lib/ai-errors
 import { fromJsonText } from "@/lib/json";
 import { prepareVacancyTextForAi } from "@/lib/prepare-vacancy-text";
 import { prisma } from "@/lib/prisma";
+import { getUserSettings } from "@/lib/settings";
 import { statusAfterCoverLetterCreated } from "@/lib/vacancy-application-queue";
 import { statusFromAiAnalysis, vacancyStatusLabel } from "@/lib/vacancy-status";
 import { vacancyAnalysisStorage } from "@/lib/vacancy-service";
@@ -46,12 +47,24 @@ export async function analyzeStoredVacancy(params: {
   const mode = parseAnalysisMode(params.mode ?? "fast");
   const aiContext = { vacancyId: params.vacancyId, processRunId: params.processRunId };
 
-  const [vacancy, resume, profile, existingLetter] = await Promise.all([
+  const [vacancy, resume, profile, existingLetter, userSettings, acceptedObservations] = await Promise.all([
     prisma.vacancy.findUniqueOrThrow({ where: { id: params.vacancyId }, include: { company: true } }),
     prisma.resume.findUniqueOrThrow({ where: { id: params.resumeId } }),
     params.searchProfileId ? prisma.searchProfile.findUnique({ where: { id: params.searchProfileId } }) : null,
-    prisma.coverLetter.findFirst({ where: { vacancyId: params.vacancyId, resumeId: params.resumeId }, orderBy: { createdAt: "desc" } })
+    prisma.coverLetter.findFirst({ where: { vacancyId: params.vacancyId, resumeId: params.resumeId }, orderBy: { createdAt: "desc" } }),
+    getUserSettings(),
+    prisma.learningObservation.findMany({ where: { status: "accepted" }, orderBy: { createdAt: "asc" } })
   ]);
+
+  const salaryExpectations =
+    userSettings.salaryExpectationMin || userSettings.salaryExpectationMax
+      ? {
+          min: userSettings.salaryExpectationMin,
+          max: userSettings.salaryExpectationMax,
+          preferredText: userSettings.salaryExpectationPreferredText,
+          isNet: userSettings.salaryExpectationNet
+        }
+      : null;
 
   const vacancyPayload = {
     title: vacancy.title,
@@ -141,7 +154,9 @@ export async function analyzeStoredVacancy(params: {
         rawDescription: vacancy.rawDescription
       },
       analysis,
-      context: aiContext
+      context: aiContext,
+      salaryExpectationsRequested: analysis.salary_expectations_requested,
+      salaryExpectationPreferredText: userSettings.salaryExpectationPreferredText
     });
     coverLetterText = coverLetter;
     writerMeta = meta;
@@ -175,7 +190,12 @@ export async function analyzeStoredVacancy(params: {
         mode: mode === "full" ? "full" : "fast",
         signal: params.signal,
         onProgress: params.onLog,
-        forceFallbackProvider: params.forceFallbackProvider
+        forceFallbackProvider: params.forceFallbackProvider,
+        salaryExpectations,
+        acceptedObservations: acceptedObservations.map((o) => ({
+          description: o.description,
+          suggestedRule: o.suggestedRule
+        }))
       });
       analysis = analyzed.analysis;
       analysisMeta = {
@@ -247,7 +267,9 @@ export async function analyzeStoredVacancy(params: {
             rawDescription: vacancy.rawDescription
           },
           analysis,
-          context: aiContext
+          context: aiContext,
+          salaryExpectationsRequested: analysis.salary_expectations_requested,
+          salaryExpectationPreferredText: userSettings.salaryExpectationPreferredText
         });
         coverLetterText = coverLetter;
         writerMeta = meta;
