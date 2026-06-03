@@ -7,7 +7,8 @@ import { analyzeStoredVacancy } from "@/lib/vacancy-ai-workflow";
 
 const analyzeSchema = z.object({
   resumeId: z.string().optional().nullable(),
-  mode: z.enum(["fast", "full", "letters_only"]).optional().default("fast")
+  mode: z.enum(["fast", "full", "letters_only"]).optional().default("fast"),
+  fallbackProvider: z.enum(["openai"]).optional()
 });
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -17,6 +18,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const settings = await getUserSettings();
     if (!settings.aiConfigured) {
       return NextResponse.json({ ok: false, message: "Сначала сохраните настройки AI." }, { status: 400 });
+    }
+
+    if (body.fallbackProvider === "openai") {
+      const writerKey = settings.writerApiKey || process.env.OPENAI_API_KEY;
+      if (!writerKey) {
+        return NextResponse.json(
+          { ok: false, message: "OpenAI не настроен. Откройте настройки AI.", code: "OPENAI_NOT_CONFIGURED" },
+          { status: 400 }
+        );
+      }
     }
 
     const vacancy = await prisma.vacancy.findUniqueOrThrow({
@@ -35,7 +46,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       vacancyId: vacancy.id,
       resumeId,
       searchProfileId: vacancy.searchProfileId,
-      mode: parseAnalysisMode(body.mode)
+      mode: parseAnalysisMode(body.mode),
+      forceFallbackProvider: body.fallbackProvider
     });
 
     return NextResponse.json({ ok: true, ...result });

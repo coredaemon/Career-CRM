@@ -1,5 +1,7 @@
 import { AiAnalysisError } from "@/lib/ai-errors";
 import { sanitizeAiErrorMessage } from "@/lib/ai-errors";
+import { isResponseFormatError, supportsJsonMode } from "@/lib/ai-json-mode";
+import { isAbortError } from "@/lib/process-abort-registry";
 import { AI_TIMEOUT_MS } from "@/lib/process-status";
 import { prisma } from "@/lib/prisma";
 import { getUserSettings } from "@/lib/settings";
@@ -19,6 +21,9 @@ export type AiRouterRequest = {
   responseFormat?: "json" | "text";
   context?: AiRouterContext;
   deferSuccessLog?: boolean;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  explicitRoute?: RouteConfig;
 };
 
 export type AiRouterResponse = {
@@ -32,9 +37,10 @@ export type AiRouterResponse = {
     totalTokens?: number;
   };
   logId?: string;
+  durationMs?: number;
 };
 
-type RouteConfig = {
+export type RouteConfig = {
   provider: string;
   baseUrl: string;
   apiKey: string;
@@ -52,6 +58,23 @@ function keyFromEnv(provider: string, role: AiTaskRole) {
   if (role === "analysis" || role === "fast") return process.env.DEEPSEEK_API_KEY || process.env.AI_API_KEY || "";
   if (provider === "openai") return process.env.OPENAI_API_KEY || process.env.AI_API_KEY || "";
   return process.env.AI_API_KEY || "";
+}
+
+function combineSignals(timeoutMs: number, external?: AbortSignal): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  if (!external) return timeoutSignal;
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any([timeoutSignal, external]);
+  }
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (timeoutSignal.aborted || external.aborted) {
+    abort();
+  } else {
+    timeoutSignal.addEventListener("abort", abort, { once: true });
+    external.addEventListener("abort", abort, { once: true });
+  }
+  return controller.signal;
 }
 
 export async function resolveAiRoute(role: AiTaskRole): Promise<RouteConfig> {
@@ -82,6 +105,66 @@ export async function resolveAiRoute(role: AiTaskRole): Promise<RouteConfig> {
         ? settings.reviewerModel || process.env.AI_REVIEWER_MODEL || preset.defaults.reviewer || ""
         : settings.writerModel || process.env.AI_WRITER_MODEL || preset.defaults.writer || ""
   };
+}
+
+export async function resolveFallbackAnalysisRoute(): Promise<RouteConfig | null> {
+  const settings = await getUserSettings();
+  const provider = settings.writerProvider || process.env.AI_WRITER_PROVIDER || "openai";
+  if (provider !== "openai") return null;
+  const preset = providerPreset(provider);
+  const apiKey = settings.writerApiKey || process.env.OPENAI_API_KEY || "";
+  const model = settings.reviewerModel || process.env.AI_REVIEWER_MODEL || preset.defaults.reviewer || "";
+  const baseUrl = settings.writerBaseUrl || process.env.AI_WRITER_BASE_URL || preset.baseUrl;
+  if (!apiKey || !model || !baseUrl) return null;
+  return { provider, baseUrl, apiKey, model };
+}
+
+async function fetchChatCompletion(params: {
+  route: RouteConfig;
+  messages: AiRouterRequest["messages"];
+  temperature: number;
+  responseFormat?: "json" | "text";
+  signal: AbortSignal;
+}) {
+  const useJsonMode = params.responseFormat === "json" && supportsJsonMode(params.route.provider);
+
+  async function doFetch(withJsonMode: boolean) {
+    const response = await fetch(apiUrl(params.route.baseUrl, "/chat/completions"), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.route.apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: params.route.model,
+        messages: params.messages,
+        temperature: params.temperature,
+        response_format: withJsonMode ? { type: "json_object" } : undefined
+      }),
+      signal: params.signal
+    });
+    return response;
+  }
+
+  let response = await doFetch(useJsonMode);
+  if (!response.ok && useJsonMode) {
+    const text = await response.text();
+    if (isResponseFormatError(response.status, text)) {
+      response = await doFetch(false);
+    } else {
+      throw new Error(text || `AI-провайдер вернул ошибку ${response.status}`);
+    }
+  }
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `AI-провайдер вернул ошибку ${response.status}`);
+  }
+
+  return response.json() as Promise<{
+    choices?: Array<{ message?: { content?: string } }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  }>;
 }
 
 export async function logAiCallSuccess(params: {
@@ -117,38 +200,24 @@ export async function logAiCallSuccess(params: {
 }
 
 export async function callAiRouter(request: AiRouterRequest): Promise<AiRouterResponse> {
-  const route = await resolveAiRoute(request.role);
+  const route = request.explicitRoute ?? (await resolveAiRoute(request.role));
   if (!route.baseUrl || !route.apiKey || !route.model) {
     throw new Error("Для выбранной роли AI не настроены провайдер, ключ или модель.");
   }
 
   const startedAt = new Date();
+  const timeoutMs = request.timeoutMs ?? AI_TIMEOUT_MS;
+  const signal = combineSignals(timeoutMs, request.signal);
 
   try {
-    const response = await fetch(apiUrl(route.baseUrl, "/chat/completions"), {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${route.apiKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: route.model,
-        messages: request.messages,
-        temperature: request.temperature ?? 0.2,
-        response_format: request.responseFormat === "json" ? { type: "json_object" } : undefined
-      }),
-      signal: AbortSignal.timeout(AI_TIMEOUT_MS)
+    const data = await fetchChatCompletion({
+      route,
+      messages: request.messages,
+      temperature: request.temperature ?? 0.2,
+      responseFormat: request.responseFormat,
+      signal
     });
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || `AI-провайдер вернул ошибку ${response.status}`);
-    }
-
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-    };
     const content = data.choices?.[0]?.message?.content ?? "";
     const usage = data.usage
       ? {
@@ -159,6 +228,7 @@ export async function callAiRouter(request: AiRouterRequest): Promise<AiRouterRe
       : undefined;
 
     const finishedAt = new Date();
+    const durationMs = finishedAt.getTime() - startedAt.getTime();
     let logId: string | undefined;
 
     if (!request.deferSuccessLog) {
@@ -175,11 +245,45 @@ export async function callAiRouter(request: AiRouterRequest): Promise<AiRouterRe
       logId = log.id;
     }
 
-    return { content, provider: route.provider, model: route.model, role: request.role, usage, logId };
+    return {
+      content,
+      provider: route.provider,
+      model: route.model,
+      role: request.role,
+      usage,
+      logId,
+      durationMs
+    };
   } catch (error) {
     const finishedAt = new Date();
+    const durationMs = finishedAt.getTime() - startedAt.getTime();
+
+    if (isAbortError(error)) {
+      await prisma.aiCallLog.create({
+        data: {
+          taskType: request.taskType,
+          provider: route.provider,
+          model: route.model,
+          role: request.role,
+          vacancyId: request.context?.vacancyId,
+          processRunId: request.context?.processRunId,
+          attemptNumber: request.context?.attemptNumber ?? 1,
+          status: "error",
+          errorCode: "ABORTED_BY_USER",
+          errorMessage: "Запрос прерван пользователем",
+          startedAt,
+          finishedAt,
+          durationMs
+        }
+      });
+      throw new AiAnalysisError({
+        code: "ABORTED_BY_USER",
+        userMessage: "Анализ прерван пользователем."
+      });
+    }
+
     const isTimeout = error instanceof Error && error.name === "TimeoutError";
-    const errorCode = isTimeout ? "AI_TIMEOUT" : undefined;
+    const errorCode = isTimeout ? "AI_TIMEOUT" : "PROVIDER_ERROR";
     const message = isTimeout
       ? "AI не ответил за отведённое время"
       : sanitizeAiErrorMessage(error instanceof Error ? error.message : "Неизвестная ошибка AI");
@@ -194,11 +298,11 @@ export async function callAiRouter(request: AiRouterRequest): Promise<AiRouterRe
         processRunId: request.context?.processRunId,
         attemptNumber: request.context?.attemptNumber ?? 1,
         status: "error",
-        errorCode: errorCode ?? (error instanceof Error && "code" in error ? String((error as { code?: string }).code) : undefined),
+        errorCode,
         errorMessage: message,
         startedAt,
         finishedAt,
-        durationMs: finishedAt.getTime() - startedAt.getTime()
+        durationMs
       }
     });
 
@@ -221,6 +325,9 @@ export async function logAiCallError(params: {
   errorCode: string;
   errorMessage: string;
   context?: AiRouterContext;
+  startedAt?: Date;
+  finishedAt?: Date;
+  durationMs?: number;
 }) {
   await prisma.aiCallLog.create({
     data: {
@@ -233,7 +340,10 @@ export async function logAiCallError(params: {
       attemptNumber: params.context?.attemptNumber,
       status: "error",
       errorCode: params.errorCode,
-      errorMessage: sanitizeAiErrorMessage(params.errorMessage)
+      errorMessage: sanitizeAiErrorMessage(params.errorMessage),
+      startedAt: params.startedAt,
+      finishedAt: params.finishedAt,
+      durationMs: params.durationMs
     }
   });
 }

@@ -14,6 +14,7 @@ import {
 } from "@/lib/analysis-mode";
 import { AiAnalysisError, INVALID_VACANCY_SOURCE_MESSAGE } from "@/lib/ai-errors";
 import { fromJsonText } from "@/lib/json";
+import { prepareVacancyTextForAi } from "@/lib/prepare-vacancy-text";
 import { prisma } from "@/lib/prisma";
 import { statusFromAiAnalysis } from "@/lib/vacancy-status";
 import { vacancyAnalysisStorage } from "@/lib/vacancy-service";
@@ -38,6 +39,8 @@ export async function analyzeStoredVacancy(params: {
   mode?: AnalysisMode;
   processRunId?: string;
   onLog?: (message: string) => void | Promise<void>;
+  signal?: AbortSignal;
+  forceFallbackProvider?: "openai";
 }) {
   const mode = parseAnalysisMode(params.mode ?? "fast");
   const aiContext = { vacancyId: params.vacancyId, processRunId: params.processRunId };
@@ -64,6 +67,8 @@ export async function analyzeStoredVacancy(params: {
     isArchived: vacancy.isArchived || undefined,
     testRequired: vacancy.testRequired || undefined
   };
+
+  let analysisMetaExtra: Record<string, unknown> = {};
 
   if (mode !== "letters_only") {
     const validation = validateVacancyDraft(vacancyPayload);
@@ -140,16 +145,51 @@ export async function analyzeStoredVacancy(params: {
     coverLetterText = coverLetter;
     writerMeta = meta;
   } else if (analysisModeIncludesAnalysis(mode)) {
+    const prepared = prepareVacancyTextForAi(vacancyPayload);
+    if (!prepared.ok) {
+      await prisma.vacancy.update({
+        where: { id: vacancy.id },
+        data: {
+          status: "invalid_source",
+          analysisErrorCode: "INVALID_VACANCY_SOURCE",
+          analysisErrorMessage: prepared.reason || INVALID_VACANCY_SOURCE_MESSAGE,
+          recommendation: prepared.reason || INVALID_VACANCY_SOURCE_MESSAGE
+        }
+      });
+      await params.onLog?.("Пропущено: текст вакансии слишком короткий или шумный.");
+      throw new AiAnalysisError({
+        code: "INVALID_VACANCY_SOURCE",
+        userMessage: prepared.reason || INVALID_VACANCY_SOURCE_MESSAGE
+      });
+    }
+
+    const vacancyForAi = { ...vacancyPayload, rawDescription: prepared.text };
     await params.onLog?.("Анализируем вакансию.");
     try {
       const analyzed = await analyzeVacancyWithAi({
         resumeText: resume.originalText,
         searchProfile: searchProfilePayload,
-        vacancy: vacancyPayload,
-        context: aiContext
+        vacancy: vacancyForAi,
+        context: aiContext,
+        mode: mode === "full" ? "full" : "fast",
+        signal: params.signal,
+        onProgress: params.onLog,
+        forceFallbackProvider: params.forceFallbackProvider
       });
       analysis = analyzed.analysis;
-      analysisMeta = analyzed.meta;
+      analysisMeta = {
+        provider: analyzed.meta.provider,
+        model: analyzed.meta.model,
+        role: analyzed.meta.role ?? "analysis"
+      };
+      analysisMetaExtra = {
+        analysisFallbackUsed: analyzed.meta.analysisFallbackUsed,
+        fallbackProvider: analyzed.meta.fallbackProvider,
+        fallbackModel: analyzed.meta.fallbackModel,
+        repairUsed: analyzed.meta.repairUsed,
+        attemptCount: analyzed.meta.attemptCount,
+        totalDurationMs: analyzed.meta.totalDurationMs
+      };
     } catch (error) {
       if (error instanceof AiAnalysisError) {
         await markVacancyAnalysisError(vacancy.id, {
@@ -234,7 +274,8 @@ export async function analyzeStoredVacancy(params: {
           writer: writerMeta,
           reviewer: reviewerMeta,
           reviewerResult,
-          mode
+          mode,
+          ...analysisMetaExtra
         })
       }
     });

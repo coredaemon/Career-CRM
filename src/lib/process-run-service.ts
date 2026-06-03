@@ -1,3 +1,4 @@
+import { abortProcess } from "@/lib/process-abort-registry";
 import { type AnalysisMode } from "@/lib/analysis-mode";
 import { toJsonText } from "@/lib/json";
 import { computeProgressDisplay } from "@/lib/process-status";
@@ -188,7 +189,8 @@ export async function isProcessStopRequested(processRunId: string) {
 }
 
 export async function requestProcessStop(processRunId: string) {
-  await appendProcessLog(processRunId, "warning", "Остановка запрошена. Завершим после текущего шага.");
+  abortProcess(processRunId);
+  await appendProcessLog(processRunId, "warning", "Остановка запрошена. Завершится после текущего AI-вызова.");
   return prisma.processRun.update({
     where: { id: processRunId },
     data: {

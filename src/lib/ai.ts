@@ -223,95 +223,26 @@ export async function analyzeVacancyWithAi(params: {
   searchProfile: Record<string, unknown> | null;
   vacancy: Record<string, unknown>;
   context?: AiRouterContext;
+  mode?: "fast" | "full";
+  signal?: AbortSignal;
+  onProgress?: (message: string) => void | Promise<void>;
+  forceFallbackProvider?: "openai";
 }) {
-  const baseMessages: ChatMessage[] = [
-    {
-      role: "system",
-      content:
-        "Ты аналитический JSON-обработчик для CareerOS. Верни только валидный JSON на русском языке. Не придумывай опыт кандидата. Используй только факты из резюме и вакансии. Если требование не подтверждено резюме, добавь его в missing_requirements. Если вакансия мутная, прямо укажи red_flags. Не пиши сопроводительное письмо."
-    },
-    {
-      role: "user",
-      content: `Верни JSON с ключами vacancy_match_score, confidence, summary, why_matches, weak_matches, red_flags, missing_requirements, recommended_resume_angle, recommended_cover_letter_focus, should_apply, reasoning_short, suggested_next_action, questions_to_clarify, avoid_claims, cover_letter_brief.
-
-Резюме:
-${params.resumeText}
-
-Профиль поиска:
-${JSON.stringify(params.searchProfile ?? {}, null, 2)}
-
-Вакансия:
-${JSON.stringify(params.vacancy, null, 2)}`
-    }
-  ];
-
-  let lastRaw = "";
-
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const startedAt = new Date();
-    const result = await callAiRouter({
-      role: "analysis",
-      taskType: "vacancy_analysis",
-      messages:
-        attempt === 0
-          ? baseMessages
-          : [
-              ...baseMessages,
-              {
-                role: "user",
-                content:
-                  "Предыдущий ответ был невалидным JSON. Верни только JSON без markdown, без пояснений и без code block."
-              }
-            ],
-      responseFormat: "json",
-      temperature: attempt === 0 ? 0.15 : 0.05,
-      context: { ...params.context, attemptNumber: attempt + 1 },
-      deferSuccessLog: true
-    });
-
-    lastRaw = result.content;
-
-    try {
-      const jsonText = extractJsonFromAiResponse(result.content);
-      if (!jsonText) throw new Error("INVALID_AI_JSON");
-      await logAiCallSuccess({
-        taskType: "vacancy_analysis",
-        provider: result.provider,
-        model: result.model,
-        role: result.role,
-        usage: result.usage,
-        context: { ...params.context, attemptNumber: attempt + 1 },
-        startedAt,
-        finishedAt: new Date()
-      });
-      return {
-        analysis: vacancyAnalysisSchema.parse(JSON.parse(jsonText)),
-        meta: { provider: result.provider, model: result.model, role: result.role }
-      };
-    } catch {
-      if (attempt === 2) {
-        await logAiCallError({
-          taskType: "vacancy_analysis",
-          provider: result.provider,
-          model: result.model,
-          role: result.role,
-          errorCode: "INVALID_AI_JSON",
-          errorMessage: "AI вернул невалидный JSON анализа вакансии.",
-          context: { ...params.context, attemptNumber: attempt + 1 }
-        });
-        throw new AiAnalysisError({
-          code: "INVALID_AI_JSON",
-          userMessage: INVALID_AI_JSON_MESSAGE,
-          technicalDetails: lastRaw.slice(0, 500)
-        });
-      }
-    }
-  }
-
-  throw new AiAnalysisError({
-    code: "INVALID_AI_JSON",
-    userMessage: INVALID_AI_JSON_MESSAGE
+  const { runVacancyAnalysisPipeline } = await import("@/lib/vacancy-analysis-pipeline");
+  const result = await runVacancyAnalysisPipeline({
+    mode: params.mode ?? "fast",
+    resumeText: params.resumeText,
+    searchProfile: params.searchProfile,
+    vacancy: params.vacancy,
+    context: params.context,
+    signal: params.signal,
+    onProgress: params.onProgress,
+    forceFallbackProvider: params.forceFallbackProvider
   });
+  return {
+    analysis: result.analysis,
+    meta: result.meta
+  };
 }
 
 async function parseRouterJson<T>(params: {

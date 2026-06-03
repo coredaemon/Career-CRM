@@ -8,6 +8,7 @@ import { recalculateSearchRunStats } from "@/lib/search-run-stats";
 import { getUserSettings } from "@/lib/settings";
 import { validateVacancyDraft, validationReasonToLog } from "@/lib/vacancy-validation";
 import { analyzeStoredVacancy } from "@/lib/vacancy-ai-workflow";
+import { createProcessAbortController, clearProcessAbortController, getProcessAbortSignal } from "@/lib/process-abort-registry";
 import { createInteraction, findOrCreateCompany, vacancyCreateData } from "@/lib/vacancy-service";
 
 export const runtime = "nodejs";
@@ -113,6 +114,7 @@ export async function POST(request: Request) {
           }
         });
         runId = run.id;
+        createProcessAbortController(runId);
         send({ type: "started", runId, progress });
         await log("Запуск создан. Готовим браузер.", "preparing");
 
@@ -374,7 +376,12 @@ export async function POST(request: Request) {
                 vacancyId,
                 resumeId: body.resumeId,
                 searchProfileId: profile.id,
-                mode: "fast"
+                mode: "fast",
+                processRunId: runId,
+                signal: getProcessAbortSignal(runId),
+                onLog: async (message) => {
+                  await log(message, "analyzing_ai");
+                }
               });
               progress.analyzed += 1;
               if (result.coverLetterCreated) progress.coverLetters += 1;
@@ -411,7 +418,7 @@ export async function POST(request: Request) {
                   errorMessage: message
                 }
               });
-              await log(isInvalidJson ? `Ошибка анализа: модель вернула невалидный JSON — ${vacancy?.title}` : message, "error");
+              await log(isInvalidJson ? `Ошибка анализа: AI не смог вернуть JSON — ${vacancy?.title}` : message, "error");
             }
           }
         } else if (body.analyzeAfterCollect && !settings.aiConfigured) {
@@ -476,6 +483,7 @@ export async function POST(request: Request) {
         send({ type: "error", message, progress, errors });
       } finally {
         if (runId) {
+          clearProcessAbortController(runId);
           try {
             await recalculateSearchRunStats(runId);
           } catch {

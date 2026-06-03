@@ -58,7 +58,7 @@ test("analysis mode flags", () => {
 });
 
 test("processStatusLabel includes stopping", () => {
-  assert.equal(processStatusLabel("running", new Date(), true), "Останавливается…");
+  assert.equal(processStatusLabel("running", new Date(), true), "Остановка запрошена. Завершится после текущего AI-вызова.");
 });
 
 test("AI_TIMEOUT error code exists in ai-errors flow", async () => {

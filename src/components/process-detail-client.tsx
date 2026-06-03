@@ -22,6 +22,9 @@ type AiDiagnostics = {
   retryCount: number;
   invalidJsonCount: number;
   timeoutCount: number;
+  repairCount: number;
+  fallbackCount: number;
+  abortedCount: number;
   durationByRole: Record<string, number>;
   lastCall: {
     provider: string;
@@ -29,6 +32,9 @@ type AiDiagnostics = {
     model: string;
     durationMs: number | null;
     createdAt: string;
+    taskType?: string;
+    attemptNumber?: number | null;
+    errorCode?: string | null;
   } | null;
   coverLettersCreated: number;
 };
@@ -141,8 +147,11 @@ export function ProcessDetailClient({ initial }: { initial: Initial }) {
           <ul className="mt-3 grid gap-1 text-sm text-[var(--muted)]">
             <li>AI-вызовов: {diagnostics.totalCalls}</li>
             <li>Retries: {diagnostics.retryCount}</li>
+            <li>JSON repair: {diagnostics.repairCount}</li>
+            <li>Fallback OpenAI: {diagnostics.fallbackCount}</li>
             <li>Ошибок JSON: {diagnostics.invalidJsonCount}</li>
             <li>Таймаутов: {diagnostics.timeoutCount}</li>
+            <li>Прервано пользователем: {diagnostics.abortedCount}</li>
             <li>Писем создано: {diagnostics.coverLettersCreated}</li>
             {Object.entries(diagnostics.durationByRole).map(([role, ms]) => (
               <li key={role}>
@@ -151,8 +160,11 @@ export function ProcessDetailClient({ initial }: { initial: Initial }) {
             ))}
             {diagnostics.lastCall ? (
               <li>
-                Последний AI-вызов: {diagnostics.lastCall.provider} / {diagnostics.lastCall.role}
-                {diagnostics.lastCall.durationMs ? ` / ${Math.round(diagnostics.lastCall.durationMs / 1000)} сек` : ""}
+                Последний AI-вызов: {diagnostics.lastCall.provider} / {diagnostics.lastCall.model}
+                {diagnostics.lastCall.taskType ? ` · ${diagnostics.lastCall.taskType}` : ""}
+                {diagnostics.lastCall.attemptNumber ? ` · попытка ${diagnostics.lastCall.attemptNumber}` : ""}
+                {diagnostics.lastCall.durationMs ? ` · ${Math.round(diagnostics.lastCall.durationMs / 1000)} сек` : ""}
+                {diagnostics.lastCall.errorCode ? ` · ${diagnostics.lastCall.errorCode}` : ""}
               </li>
             ) : (
               <li>Среднее время на вакансию пока считается…</li>

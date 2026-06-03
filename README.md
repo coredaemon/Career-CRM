@@ -112,14 +112,52 @@ If AI analysis did not run, check `Настройки AI`, then use `Проан�
 - Progress uses one counter everywhere (sidebar, `/processes`, `/vacancies`, `/processes/[id]`): `N из M`, elapsed time, and ETA when at least two vacancies finished.
 - Stop: `Остановить после текущей вакансии` on `/vacancies`, bulk button, or **Остановить процесс** on `/processes/[id]`. Bulk actions on `/processes`: stop all AI, stop all searches, mark stale as stopped, hide completed runs from the list (data kept).
 - Only one `vacancy_analysis` run at a time; the analyze button is disabled while another run is active.
-- **Скорость и диагностика** on `/processes/[id]`: time per AI role, retries, invalid JSON count, timeouts, last model call.
+- **Скорость и диагностика** on `/processes/[id]`: time per AI role, retries, JSON repair, OpenAI fallback, invalid JSON count, timeouts, aborted calls, last model call.
 
 ### Why AI analysis can take long
 
 - Vacancies are processed **one at a time** (safer for rate limits and SQLite).
-- Each vacancy may call: DeepSeek (analysis, up to 3 JSON retries), optional reviewer, optional OpenAI writer.
-- A single call can take up to **90 seconds** before `AI_TIMEOUT`; the vacancy is saved with `analysis_error` and the run continues.
-- Post-search AI uses **fast** mode by default (no letters for all 50 vacancies). Generate letters later via **Только письма для рекомендованных** or full mode if you explicitly choose it.
+- **Fast mode** uses a simplified JSON schema (score, flags, recommendation only) via DeepSeek `fast` model — typically one call per vacancy, up to **60 seconds** timeout.
+- On invalid JSON: one strict retry, then optional **JSON repair** via OpenAI reviewer (45s), then optional **OpenAI fallback analysis** if DeepSeek was the analyst.
+- **Full mode** uses the extended schema (cover letter brief, resume angle, etc.), timeout **90 seconds**, optional reviewer and writer.
+- Post-search AI uses **fast** mode by default (no letters for all vacancies). Generate letters later via **Только письма для рекомендованных** or full mode if you explicitly choose it.
+
+### Fast vs full analysis
+
+| | Fast | Full |
+|---|------|------|
+| JSON schema | 8 fields, max 3 items per array | 15+ fields including cover_letter_brief |
+| Model role | `fast` (DeepSeek) | `analysis` |
+| Reviewer | No | Yes for borderline scores |
+| Cover letter | No | Yes for recommended vacancies |
+| Typical time | &lt;60s per vacancy | 1–3 min per vacancy |
+
+### Invalid AI JSON
+
+DeepSeek and other models sometimes return markdown, truncated JSON, or prose instead of strict JSON — especially on noisy vacancy text (cookie banners, navigation).
+
+CareerOS now handles this in stages:
+
+1. **Strict retry** — second attempt with lower temperature.
+2. **JSON repair** — OpenAI reviewer/writer fixes the raw response into valid JSON (one attempt, 45s).
+3. **OpenAI fallback** — if analysis provider is DeepSeek and repair failed, rerun analysis via OpenAI with the same schema.
+
+If all stages fail, the vacancy is saved with `analysis_error` and `INVALID_AI_JSON`.
+
+On the vacancy page: explanation, diagnostics (model, attempts, repair/fallback, duration), and actions:
+
+- Retry fast analysis
+- **Retry via OpenAI** (if OpenAI writer/reviewer is configured; otherwise opens AI settings)
+- Leave for manual review
+- Open AI settings
+
+Writer and reviewer are not called for cover letters until analysis JSON is valid.
+
+### Stop during AI analysis
+
+When you click stop, the UI shows: **Остановка запрошена. Завершится после текущего AI-вызова.**
+
+CareerOS aborts the in-flight AI fetch when possible, skips the next vacancy, sets status to `stopped`, and logs **Процесс остановлен пользователем**.
 
 ### Stale or stuck processes
 
@@ -130,14 +168,6 @@ Actions:
 - `Пометить как остановленный` on search history or run details.
 - `Повторить запуск` from the search page.
 - Open `Процессы` to review stale search and AI tasks.
-
-### Invalid AI JSON
-
-If the analyst model returns text instead of JSON, CareerOS retries up to 3 times, then saves the vacancy with `Ошибка анализа`.
-
-On the vacancy page you will see an explanation that the model may have received garbage text (cookie banners, navigation) or failed JSON formatting, plus actions: check vacancy text, retry fast analysis, manual review, or mark as junk.
-
-Writer and reviewer are not called when analysis JSON is invalid.
 
 ### HH service pages and invalid sources
 

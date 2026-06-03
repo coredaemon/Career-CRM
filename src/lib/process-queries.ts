@@ -17,6 +17,9 @@ export type AiDiagnostics = {
   retryCount: number;
   invalidJsonCount: number;
   timeoutCount: number;
+  repairCount: number;
+  fallbackCount: number;
+  abortedCount: number;
   durationByRole: Record<string, number>;
   lastCall: {
     provider: string;
@@ -24,6 +27,9 @@ export type AiDiagnostics = {
     model: string;
     durationMs: number | null;
     createdAt: Date;
+    taskType?: string;
+    attemptNumber?: number | null;
+    errorCode?: string | null;
   } | null;
   coverLettersCreated: number;
 };
@@ -38,11 +44,17 @@ export async function aggregateAiDiagnostics(processRunId: string): Promise<AiDi
   let retryCount = 0;
   let invalidJsonCount = 0;
   let timeoutCount = 0;
+  let repairCount = 0;
+  let fallbackCount = 0;
+  let abortedCount = 0;
 
   for (const log of logs) {
     if ((log.attemptNumber ?? 1) > 1) retryCount += 1;
     if (log.errorCode === "INVALID_AI_JSON") invalidJsonCount += 1;
     if (log.errorCode === "AI_TIMEOUT") timeoutCount += 1;
+    if (log.errorCode === "ABORTED_BY_USER") abortedCount += 1;
+    if (log.taskType === "json_repair" && log.status === "success") repairCount += 1;
+    if (log.taskType === "vacancy_analysis_fallback" && log.status === "success") fallbackCount += 1;
     if (log.durationMs) {
       durationByRole[log.role] = (durationByRole[log.role] ?? 0) + log.durationMs;
     }
@@ -68,6 +80,9 @@ export async function aggregateAiDiagnostics(processRunId: string): Promise<AiDi
     retryCount,
     invalidJsonCount,
     timeoutCount,
+    repairCount,
+    fallbackCount,
+    abortedCount,
     durationByRole,
     lastCall: last
       ? {
@@ -75,7 +90,10 @@ export async function aggregateAiDiagnostics(processRunId: string): Promise<AiDi
           role: last.role,
           model: last.model,
           durationMs: last.durationMs,
-          createdAt: last.createdAt
+          createdAt: last.createdAt,
+          taskType: last.taskType,
+          attemptNumber: last.attemptNumber,
+          errorCode: last.errorCode
         }
       : null,
     coverLettersCreated

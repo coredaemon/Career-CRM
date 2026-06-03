@@ -1,19 +1,36 @@
+export type AiAnalysisDiagnostics = {
+  attempts: number;
+  repairUsed: boolean;
+  fallbackUsed: boolean;
+  totalDurationMs: number;
+  lastProvider?: string;
+  lastModel?: string;
+  errorCode?: string;
+};
+
 export class AiAnalysisError extends Error {
   code: string;
   userMessage: string;
   technicalDetails?: string;
+  diagnostics?: AiAnalysisDiagnostics;
 
-  constructor(params: { code: string; userMessage: string; technicalDetails?: string }) {
+  constructor(params: {
+    code: string;
+    userMessage: string;
+    technicalDetails?: string;
+    diagnostics?: AiAnalysisDiagnostics;
+  }) {
     super(params.userMessage);
     this.name = "AiAnalysisError";
     this.code = params.code;
     this.userMessage = params.userMessage;
     this.technicalDetails = params.technicalDetails;
+    this.diagnostics = params.diagnostics;
   }
 }
 
 export const INVALID_AI_JSON_MESSAGE =
-  "AI получил текст, но не смог вернуть структурированный анализ. Частая причина — модель плохо соблюдает JSON-формат или в вакансию попал мусорный текст.";
+  "AI не смог разобрать вакансию в структурированном формате. Возможные причины: модель не соблюдает JSON, текст вакансии слишком шумный или API ответил нестабильно.";
 
 export const INVALID_VACANCY_SOURCE_MESSAGE =
   "Это не похоже на страницу вакансии. AI-анализ не запускался.";

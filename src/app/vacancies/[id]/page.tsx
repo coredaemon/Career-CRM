@@ -65,6 +65,9 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
     analysis?: { provider?: string; model?: string };
     writer?: { provider?: string; model?: string };
     reviewer?: { provider?: string; model?: string } | null;
+    analysisFallbackUsed?: boolean;
+    fallbackProvider?: string;
+    fallbackModel?: string;
   }>(vacancy.aiMetaJson, {});
 
   return (
@@ -127,6 +130,12 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
               {aiMeta.writer?.model || "не указан"}
               {aiMeta.reviewer ? ` · Проверяющий: ${aiMeta.reviewer.model}` : ""}
             </p>
+            {aiMeta.analysisFallbackUsed ? (
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                Анализ выполнен резервной моделью: {aiMeta.fallbackProvider === "openai" ? "OpenAI" : aiMeta.fallbackProvider}
+                {aiMeta.fallbackModel ? ` (${aiMeta.fallbackModel})` : ""}
+              </p>
+            ) : null}
             <p className="mt-3 text-sm leading-6 text-[var(--muted)]">{analysis.summary || "AI-анализ ещё не выполнялся."}</p>
             <List title="Почему подходит" items={analysis.why_matches} />
             <List title="Слабые совпадения" items={analysis.weak_matches} />

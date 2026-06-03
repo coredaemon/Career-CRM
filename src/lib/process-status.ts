@@ -1,5 +1,8 @@
 export const STALE_AFTER_MS = 10 * 60 * 1000;
 export const AI_TIMEOUT_MS = 90_000;
+export const AI_TIMEOUT_MS_FAST = 60_000;
+export const AI_TIMEOUT_MS_FULL = 90_000;
+export const AI_REPAIR_TIMEOUT_MS = 45_000;
 
 type AnalysisMode = "fast" | "full" | "letters_only";
 
@@ -21,7 +24,7 @@ export type ProcessStatus =
 export const processStatusLabels: Record<string, string> = {
   queued: "В очереди",
   running: "Выполняется",
-  stopping: "Останавливается…",
+  stopping: "Остановка запрошена. Завершится после текущего AI-вызова.",
   completed: "Завершён",
   error: "Ошибка",
   stopped: "Остановлен",

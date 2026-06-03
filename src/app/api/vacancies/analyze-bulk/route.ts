@@ -3,6 +3,7 @@ import { z } from "zod";
 import { analysisModeLabels, parseAnalysisMode, type AnalysisMode } from "@/lib/analysis-mode";
 import { AiAnalysisError } from "@/lib/ai-errors";
 import { prisma } from "@/lib/prisma";
+import { createProcessAbortController, clearProcessAbortController } from "@/lib/process-abort-registry";
 import { findBlockingVacancyAnalysisProcess } from "@/lib/process-queries";
 import { buildProcessRunUiState, vacancyEligibleForBulkWhere } from "@/lib/process-status";
 import {
@@ -49,6 +50,7 @@ type BulkVacancy = {
 };
 
 async function runBulkAnalysis(processId: string, mode: AnalysisMode, vacancies: BulkVacancy[]) {
+  const signal = createProcessAbortController(processId);
   let analyzed = 0;
   let skipped = 0;
   let errors = 0;
@@ -158,6 +160,7 @@ async function runBulkAnalysis(processId: string, mode: AnalysisMode, vacancies:
           searchProfileId: vacancy.searchProfileId,
           mode,
           processRunId: processId,
+          signal,
           onLog: async (message) => {
             await appendProcessLog(processId, "info", `${logPrefix(index, total)} ${message}`);
           }
@@ -191,10 +194,12 @@ async function runBulkAnalysis(processId: string, mode: AnalysisMode, vacancies:
         errorMessages.push(`${vacancy.title}: ${message}`);
         const detail =
           code === "INVALID_AI_JSON"
-            ? "модель вернула некорректный JSON после 3 попыток"
+            ? "модель не вернула валидный JSON (repair/fallback не помогли)"
             : code === "AI_TIMEOUT"
-              ? "превышен таймаут 90 сек"
-              : message;
+              ? "превышен таймаут AI"
+              : code === "ABORTED_BY_USER"
+                ? "прервано пользователем"
+                : message;
         await appendProcessLog(processId, "error", `${logPrefix(index, total)} Ошибка: ${detail}.`, { code, message });
         await finishItem({ status: "error", errorCode: code, errorMessage: message, startedAt });
       }
@@ -224,7 +229,9 @@ async function runBulkAnalysis(processId: string, mode: AnalysisMode, vacancies:
         analysisMode: mode
       }
     });
+    clearProcessAbortController(processId);
   } catch (error) {
+    clearProcessAbortController(processId);
     await finishProcessRun(processId, {
       status: "error",
       errorMessage: error instanceof Error ? error.message : "Массовый AI-анализ не удался."
