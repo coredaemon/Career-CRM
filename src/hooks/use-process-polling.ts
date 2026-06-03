@@ -41,7 +41,9 @@ export function useProcessPolling<T>(
         setError(null);
         setTick((value) => value + 1);
 
-        const status = (json as { run?: { status?: string } }).run?.status;
+        const status =
+          (json as { state?: { status?: string } }).state?.status ??
+          (json as { run?: { status?: string } }).run?.status;
         if (status && ["completed", "error", "stopped", "stale"].includes(status)) {
           onTerminalRef.current?.(json);
         }

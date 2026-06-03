@@ -252,15 +252,22 @@ export async function POST(request: Request) {
 
             try {
               await log(`Запускаем AI-анализ: ${vacancy.title}`, "analyzing_ai");
-              const result = await analyzeStoredVacancy({ vacancyId, resumeId: body.resumeId, searchProfileId: profile.id });
+              const result = await analyzeStoredVacancy({
+                vacancyId,
+                resumeId: body.resumeId,
+                searchProfileId: profile.id,
+                mode: "fast"
+              });
               progress.analyzed += 1;
-              progress.coverLetters += 1;
+              if (result.coverLetterCreated) progress.coverLetters += 1;
               if (result.vacancy.status === "ready_to_apply" || result.vacancy.status === "ai_recommended") progress.recommended += 1;
               if (result.vacancy.status === "needs_review") progress.needsReview += 1;
               if (result.vacancy.status === "rejected_by_ai") progress.skippedByAi += 1;
               await prisma.searchRunItem.updateMany({ where: { searchRunId: runId, vacancyId }, data: { status: "analyzed" } });
               await log(`AI-анализ завершён: ${vacancy.title}`, "analyzing_ai");
-              await log(`Сопроводительное создано: ${vacancy.title}`, "analyzing_ai");
+              if (result.coverLetterCreated) {
+                await log(`Сопроводительное создано: ${vacancy.title}`, "analyzing_ai");
+              }
             } catch (error) {
               const isInvalidJson = error instanceof AiAnalysisError && error.code === "INVALID_AI_JSON";
               const message = isInvalidJson

@@ -4,7 +4,6 @@ import { getActiveProcessesSummary } from "@/lib/active-processes";
 import { getUserSettings } from "@/lib/settings";
 import { BulkAiAnalyzeButton } from "@/components/bulk-ai-analyze-button";
 import { Card, LinkButton, PageHeader } from "@/components/ui";
-import { searchRunStatusLabel } from "@/lib/process-status";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +15,7 @@ export default async function DashboardPage() {
       prisma.resume.count(),
       prisma.searchProfile.count(),
       prisma.vacancy.count(),
-      prisma.vacancy.count({ where: { OR: [{ matchScore: null }, { aiAnalysisJson: null }] } }),
+      activeProcesses.eligibleForBulk,
       prisma.vacancy.count({ where: { OR: [{ status: "ai_recommended" }, { status: "ready_to_apply" }] } }),
       prisma.vacancy.count({
         where: { status: "ready_to_apply", coverLetters: { some: {} } }
@@ -96,7 +95,7 @@ export default async function DashboardPage() {
                   <Link href={run.href} className="font-medium hover:text-[var(--accent)]">
                     Поиск: {run.title}
                   </Link>
-                  <p className="mt-1 text-xs text-[var(--muted)]">{searchRunStatusLabel(run.status)}</p>
+                  <p className="mt-1 text-xs text-[var(--muted)]">{run.state?.humanSummary ?? run.status}</p>
                 </div>
               ))}
               {activeProcesses.processRuns.map((run) => (
@@ -105,7 +104,7 @@ export default async function DashboardPage() {
                     {run.title}
                   </Link>
                   <p className="mt-1 text-xs text-[var(--muted)]">
-                    {run.progressCurrent} / {run.progressTotal}
+                    {run.state?.humanSummary ?? `${run.progressCurrent} / ${run.progressTotal}`}
                   </p>
                 </div>
               ))}

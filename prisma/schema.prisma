@@ -151,6 +151,7 @@ model SearchRun {
   errorCode           String?
   errorMessage        String?
   errorLogJson        String?
+  listHidden          Boolean         @default(false)
   createdAt           DateTime        @default(now())
   updatedAt           DateTime        @updatedAt
   searchProfile       SearchProfile?  @relation(fields: [searchProfileId], references: [id], onDelete: SetNull)
@@ -171,11 +172,13 @@ model SearchRunItem {
 }
 
 model AiCallLog {
-  id               String   @id @default(cuid())
+  id               String    @id @default(cuid())
   taskType         String
   provider         String
   model            String
   role             String
+  vacancyId        String?
+  processRunId     String?
   inputTokens      Int?
   outputTokens     Int?
   totalTokens      Int?
@@ -183,27 +186,51 @@ model AiCallLog {
   status           String
   errorCode        String?
   errorMessage     String?
-  createdAt        DateTime @default(now())
+  attemptNumber    Int?
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  durationMs       Int?
+  createdAt        DateTime  @default(now())
 }
 
 model ProcessRun {
-  id              String       @id @default(cuid())
+  id              String           @id @default(cuid())
   type            String
   status          String
   title           String
   description     String?
-  progressCurrent Int          @default(0)
-  progressTotal   Int          @default(0)
+  progressCurrent Int              @default(0)
+  progressTotal   Int              @default(0)
   progressPercent Int?
   currentStep     String?
-  startedAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  analysisMode    String?
+  stopRequested   Boolean          @default(false)
+  stoppedAt       DateTime?
+  stoppedReason   String?
+  listHidden      Boolean          @default(false)
+  startedAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
   finishedAt      DateTime?
   errorMessage    String?
   errorCode       String?
   resultJson      String?
   metadataJson    String?
   logs            ProcessLog[]
+  items           ProcessRunItem[]
+}
+
+model ProcessRunItem {
+  id           String     @id @default(cuid())
+  processRunId String
+  vacancyId    String?
+  status       String
+  title        String
+  errorCode    String?
+  errorMessage String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  durationMs   Int?
+  processRun   ProcessRun @relation(fields: [processRunId], references: [id], onDelete: Cascade)
 }
 
 model ProcessLog {

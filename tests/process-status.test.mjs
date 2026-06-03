@@ -6,6 +6,7 @@ const { searchRunStatusLabel, processStatusLabel, effectiveSearchRunStatus } = a
 test("Russian labels for process statuses", () => {
   assert.equal(processStatusLabel("running"), "Выполняется");
   assert.equal(processStatusLabel("stale"), "Завис");
+  assert.equal(processStatusLabel("running", new Date(), true), "Останавливается…");
   assert.equal(searchRunStatusLabel("completed"), "Завершён");
 });
 

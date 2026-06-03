@@ -1,7 +1,15 @@
+import { AiAnalysisError } from "@/lib/ai-errors";
 import { sanitizeAiErrorMessage } from "@/lib/ai-errors";
+import { AI_TIMEOUT_MS } from "@/lib/process-status";
 import { prisma } from "@/lib/prisma";
 import { getUserSettings } from "@/lib/settings";
 import { AiTaskRole, providerPreset } from "@/lib/ai-presets";
+
+export type AiRouterContext = {
+  vacancyId?: string;
+  processRunId?: string;
+  attemptNumber?: number;
+};
 
 export type AiRouterRequest = {
   role: AiTaskRole;
@@ -9,6 +17,8 @@ export type AiRouterRequest = {
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   temperature?: number;
   responseFormat?: "json" | "text";
+  context?: AiRouterContext;
+  deferSuccessLog?: boolean;
 };
 
 export type AiRouterResponse = {
@@ -21,6 +31,7 @@ export type AiRouterResponse = {
     outputTokens?: number;
     totalTokens?: number;
   };
+  logId?: string;
 };
 
 type RouteConfig = {
@@ -73,11 +84,45 @@ export async function resolveAiRoute(role: AiTaskRole): Promise<RouteConfig> {
   };
 }
 
+export async function logAiCallSuccess(params: {
+  taskType: string;
+  provider: string;
+  model: string;
+  role: AiTaskRole;
+  usage?: AiRouterResponse["usage"];
+  context?: AiRouterContext;
+  startedAt: Date;
+  finishedAt: Date;
+}) {
+  const durationMs = params.finishedAt.getTime() - params.startedAt.getTime();
+  return prisma.aiCallLog.create({
+    data: {
+      taskType: params.taskType,
+      provider: params.provider,
+      model: params.model,
+      role: params.role,
+      vacancyId: params.context?.vacancyId,
+      processRunId: params.context?.processRunId,
+      attemptNumber: params.context?.attemptNumber ?? 1,
+      inputTokens: params.usage?.inputTokens,
+      outputTokens: params.usage?.outputTokens,
+      totalTokens: params.usage?.totalTokens,
+      estimatedCostUsd: null,
+      status: "success",
+      startedAt: params.startedAt,
+      finishedAt: params.finishedAt,
+      durationMs
+    }
+  });
+}
+
 export async function callAiRouter(request: AiRouterRequest): Promise<AiRouterResponse> {
   const route = await resolveAiRoute(request.role);
   if (!route.baseUrl || !route.apiKey || !route.model) {
     throw new Error("Для выбранной роли AI не настроены провайдер, ключ или модель.");
   }
+
+  const startedAt = new Date();
 
   try {
     const response = await fetch(apiUrl(route.baseUrl, "/chat/completions"), {
@@ -91,7 +136,8 @@ export async function callAiRouter(request: AiRouterRequest): Promise<AiRouterRe
         messages: request.messages,
         temperature: request.temperature ?? 0.2,
         response_format: request.responseFormat === "json" ? { type: "json_object" } : undefined
-      })
+      }),
+      signal: AbortSignal.timeout(AI_TIMEOUT_MS)
     });
 
     if (!response.ok) {
@@ -112,34 +158,57 @@ export async function callAiRouter(request: AiRouterRequest): Promise<AiRouterRe
         }
       : undefined;
 
+    const finishedAt = new Date();
+    let logId: string | undefined;
+
+    if (!request.deferSuccessLog) {
+      const log = await logAiCallSuccess({
+        taskType: request.taskType,
+        provider: route.provider,
+        model: route.model,
+        role: request.role,
+        usage,
+        context: request.context,
+        startedAt,
+        finishedAt
+      });
+      logId = log.id;
+    }
+
+    return { content, provider: route.provider, model: route.model, role: request.role, usage, logId };
+  } catch (error) {
+    const finishedAt = new Date();
+    const isTimeout = error instanceof Error && error.name === "TimeoutError";
+    const errorCode = isTimeout ? "AI_TIMEOUT" : undefined;
+    const message = isTimeout
+      ? "AI не ответил за отведённое время"
+      : sanitizeAiErrorMessage(error instanceof Error ? error.message : "Неизвестная ошибка AI");
+
     await prisma.aiCallLog.create({
       data: {
         taskType: request.taskType,
         provider: route.provider,
         model: route.model,
         role: request.role,
-        inputTokens: usage?.inputTokens,
-        outputTokens: usage?.outputTokens,
-        totalTokens: usage?.totalTokens,
-        estimatedCostUsd: null,
-        status: "success"
+        vacancyId: request.context?.vacancyId,
+        processRunId: request.context?.processRunId,
+        attemptNumber: request.context?.attemptNumber ?? 1,
+        status: "error",
+        errorCode: errorCode ?? (error instanceof Error && "code" in error ? String((error as { code?: string }).code) : undefined),
+        errorMessage: message,
+        startedAt,
+        finishedAt,
+        durationMs: finishedAt.getTime() - startedAt.getTime()
       }
     });
 
-    return { content, provider: route.provider, model: route.model, role: request.role, usage };
-  } catch (error) {
-    const message = sanitizeAiErrorMessage(error instanceof Error ? error.message : "Неизвестная ошибка AI");
-    await prisma.aiCallLog.create({
-      data: {
-        taskType: request.taskType,
-        provider: route.provider,
-        model: route.model,
-        role: request.role,
-        status: "error",
-        errorCode: error instanceof Error && "code" in error ? String((error as { code?: string }).code) : undefined,
-        errorMessage: message
-      }
-    });
+    if (isTimeout) {
+      throw new AiAnalysisError({
+        code: "AI_TIMEOUT",
+        userMessage: "AI не ответил вовремя. Вакансия сохранена, анализ можно повторить позже."
+      });
+    }
+
     throw error instanceof Error ? new Error(message) : error;
   }
 }
@@ -151,6 +220,7 @@ export async function logAiCallError(params: {
   role: AiTaskRole;
   errorCode: string;
   errorMessage: string;
+  context?: AiRouterContext;
 }) {
   await prisma.aiCallLog.create({
     data: {
@@ -158,6 +228,9 @@ export async function logAiCallError(params: {
       provider: params.provider,
       model: params.model,
       role: params.role,
+      vacancyId: params.context?.vacancyId,
+      processRunId: params.context?.processRunId,
+      attemptNumber: params.context?.attemptNumber,
       status: "error",
       errorCode: params.errorCode,
       errorMessage: sanitizeAiErrorMessage(params.errorMessage)

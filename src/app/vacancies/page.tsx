@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { Prisma } from "@prisma/client";
 import { BulkAiAnalyzeButton } from "@/components/bulk-ai-analyze-button";
+import { getActiveProcessesSummary } from "@/lib/active-processes";
+import { countVacanciesEligibleForBulk } from "@/lib/process-queries";
 import { CopyButton } from "@/components/copy-button";
 import { VacancyAiRetryButton } from "@/components/vacancy-ai-retry-button";
 import { VacancyQuickActions } from "@/components/vacancy-quick-actions";
@@ -26,7 +28,7 @@ const tabs = [
 export default async function VacanciesPage({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
   const { status } = await searchParams;
   const where = vacancyWhere(status);
-  const [vacancies, totalVacancies, withoutAi, analysisErrors, lastSearchRun] = await Promise.all([
+  const [vacancies, totalVacancies, withoutAi, eligibleForBulk, analysisErrors, lastSearchRun, activeSummary] = await Promise.all([
     prisma.vacancy.findMany({
       where,
       orderBy: { createdAt: "desc" },
@@ -37,8 +39,10 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
     }),
     prisma.vacancy.count(),
     prisma.vacancy.count({ where: { OR: [{ matchScore: null }, { aiAnalysisJson: null }] } }),
+    countVacanciesEligibleForBulk(),
     prisma.vacancy.count({ where: { status: "analysis_error" } }),
-    prisma.searchRun.findFirst({ orderBy: { startedAt: "desc" }, select: { id: true } })
+    prisma.searchRun.findFirst({ orderBy: { startedAt: "desc" }, select: { id: true } }),
+    getActiveProcessesSummary()
   ]);
 
   return (
@@ -67,12 +71,23 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
         ))}
       </div>
 
-      {withoutAi > 0 ? (
+      {activeSummary.activeVacancyAnalysis ? (
+        <Card className="mb-5 border-[var(--accent)]">
+          <p className="text-sm font-medium">{activeSummary.activeVacancyAnalysis.humanSummary}</p>
+          <p className="mt-1 text-xs text-[var(--muted)]">{activeSummary.activeVacancyAnalysis.etaLabel}</p>
+        </Card>
+      ) : null}
+
+      {eligibleForBulk > 0 ? (
         <Card className="mb-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h2 className="text-lg font-semibold tracking-normal">Есть вакансии без AI-анализа: {withoutAi}</h2>
-              <p className="mt-1 text-sm text-[var(--muted)]">Запустите анализ, чтобы получить score, рекомендации и сопроводительные письма.</p>
+              <h2 className="text-lg font-semibold tracking-normal">
+                Готовы к AI-анализу (с профилем поиска): {eligibleForBulk}
+              </h2>
+              <p className="mt-1 text-sm text-[var(--muted)]">
+                Всего без AI-полей: {withoutAi}. Запустите быстрый анализ для score и рекомендаций; письма — отдельно для рекомендованных.
+              </p>
             </div>
             <div className="flex flex-wrap gap-2">
               <BulkAiAnalyzeButton />

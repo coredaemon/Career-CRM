@@ -1,25 +1,26 @@
 import { fromJsonText } from "@/lib/json";
 import { prisma } from "@/lib/prisma";
-import { effectiveSearchRunStatus, isStale } from "@/lib/process-status";
+import { countVacanciesEligibleForBulk, findBlockingVacancyAnalysisProcess } from "@/lib/process-queries";
+import { buildProcessRunUiState, buildSearchRunUiState } from "@/lib/process-status";
 import { markAllStaleProcesses } from "@/lib/stale-process";
 
 export async function getActiveProcessesSummary() {
   await markAllStaleProcesses();
 
-  const [searchRuns, processRuns, withoutAi, analysisErrors, readyToApply, staleSearchCount, staleProcessCount] =
+  const [searchRuns, processRuns, eligibleForBulk, analysisErrors, readyToApply, staleSearchCount, staleProcessCount, blockingProcess] =
     await Promise.all([
       prisma.searchRun.findMany({
-        where: { status: { in: ["running", "stale", "queued"] } },
+        where: { status: { in: ["running", "stale", "queued"] }, listHidden: false },
         orderBy: { startedAt: "desc" },
         take: 5,
         include: { searchProfile: true }
       }),
       prisma.processRun.findMany({
-        where: { status: { in: ["running", "stale", "queued"] } },
+        where: { status: { in: ["running", "stale", "queued"] }, listHidden: false },
         orderBy: { startedAt: "desc" },
         take: 5
       }),
-      prisma.vacancy.count({ where: { OR: [{ matchScore: null }, { aiAnalysisJson: null }] } }),
+      countVacanciesEligibleForBulk(),
       prisma.vacancy.count({ where: { status: "analysis_error" } }),
       prisma.vacancy.count({
         where: {
@@ -27,15 +28,16 @@ export async function getActiveProcessesSummary() {
           coverLetters: { some: {} }
         }
       }),
-      prisma.searchRun.count({ where: { status: "stale" } }),
-      prisma.processRun.count({ where: { status: "stale" } })
+      prisma.searchRun.count({ where: { status: "stale", listHidden: false } }),
+      prisma.processRun.count({ where: { status: "stale", listHidden: false } }),
+      findBlockingVacancyAnalysisProcess()
     ]);
 
   const actions: Array<{ message: string; href: string; label: string }> = [];
 
-  if (withoutAi > 0) {
+  if (eligibleForBulk > 0 && !blockingProcess) {
     actions.push({
-      message: `Есть ${withoutAi} вакансий без AI-анализа`,
+      message: `Есть ${eligibleForBulk} вакансий без AI-анализа`,
       href: "/vacancies?status=no_ai",
       label: "Запустить анализ"
     });
@@ -62,25 +64,49 @@ export async function getActiveProcessesSummary() {
     });
   }
 
+  const activeVacancyAnalysis = blockingProcess ? buildProcessRunUiState(blockingProcess) : null;
+
   return {
-    searchRuns: searchRuns.map((run) => ({
-      id: run.id,
-      title: run.searchProfile?.title || "Поиск",
-      status: effectiveSearchRunStatus(run.status, run.updatedAt),
-      stage: run.stage,
-      href: `/search/runs/${run.id}`,
-      progress: fromJsonText(run.progressJson, {}),
-      isStale: run.status === "stale" || (run.status === "running" && isStale(run.updatedAt))
-    })),
-    processRuns: processRuns.map((run) => ({
-      id: run.id,
-      title: run.title,
-      status: run.status,
-      type: run.type,
-      href: `/processes/${run.id}`,
-      progressCurrent: run.progressCurrent,
-      progressTotal: run.progressTotal
-    })),
+    searchRuns: searchRuns.map((run) => {
+      const state = buildSearchRunUiState(
+        {
+          id: run.id,
+          status: run.status,
+          stopRequested: run.stopRequested,
+          stage: run.stage,
+          startedAt: run.startedAt,
+          updatedAt: run.updatedAt,
+          finishedAt: run.finishedAt,
+          currentQueryIndex: run.currentQueryIndex,
+          totalQueries: run.totalQueries,
+          searchProfileTitle: run.searchProfile?.title
+        },
+        { progress: fromJsonText(run.progressJson, {}) }
+      );
+      return {
+        id: run.id,
+        title: state.title,
+        status: state.status,
+        stage: run.stage,
+        href: state.href,
+        state
+      };
+    }),
+    processRuns: processRuns.map((run) => {
+      const state = buildProcessRunUiState(run);
+      return {
+        id: run.id,
+        title: run.title,
+        status: state.status,
+        type: run.type,
+        href: state.href,
+        progressCurrent: state.displayCurrent,
+        progressTotal: state.displayTotal,
+        state
+      };
+    }),
+    activeVacancyAnalysis,
+    eligibleForBulk,
     staleCount: staleSearchCount + staleProcessCount,
     analysisErrorCount: analysisErrors,
     actions

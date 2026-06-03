@@ -3,10 +3,19 @@
 import Link from "next/link";
 import { useProcessPolling } from "@/hooks/use-process-polling";
 
+type NormalizedState = {
+  humanSummary: string;
+  displayCurrent: number;
+  displayTotal: number;
+  href: string;
+  etaLabel: string;
+};
+
 type ActiveResponse = {
   ok: boolean;
-  searchRuns: Array<{ id: string; title: string; status: string; href: string }>;
-  processRuns: Array<{ id: string; title: string; status: string; progressCurrent: number; progressTotal: number; href: string }>;
+  searchRuns: Array<{ id: string; title: string; status: string; href: string; state?: NormalizedState }>;
+  processRuns: Array<{ id: string; title: string; status: string; href: string; state?: NormalizedState }>;
+  activeVacancyAnalysis?: NormalizedState | null;
   staleCount: number;
   analysisErrorCount: number;
 };
@@ -16,8 +25,10 @@ export function ProcessIndicator() {
 
   if (!data?.ok) return null;
 
-  const activeSearch = data.searchRuns.find((run) => run.status === "running");
-  const activeProcess = data.processRuns.find((run) => run.status === "running");
+  const activeSearch = data.searchRuns.find((run) => run.status === "running" || run.status === "stopping");
+  const activeProcess =
+    data.activeVacancyAnalysis ||
+    data.processRuns.find((run) => run.status === "running" || run.status === "queued" || run.status === "stopping")?.state;
 
   if (!activeSearch && !activeProcess && data.staleCount === 0 && data.analysisErrorCount === 0) {
     return null;
@@ -28,15 +39,17 @@ export function ProcessIndicator() {
       {activeSearch ? (
         <div>
           <Link href={activeSearch.href} className="font-medium hover:text-[var(--accent)]">
-            Идёт поиск: {activeSearch.title}
+            {activeSearch.state?.humanSummary || `Идёт поиск: ${activeSearch.title}`}
           </Link>
         </div>
       ) : null}
       {activeProcess ? (
         <div className={activeSearch ? "mt-2" : ""}>
           <Link href={activeProcess.href} className="font-medium hover:text-[var(--accent)]">
-            AI анализирует {activeProcess.progressCurrent} из {activeProcess.progressTotal}
+            {activeProcess.humanSummary ||
+              `AI анализирует ${activeProcess.displayCurrent} из ${activeProcess.displayTotal}`}
           </Link>
+          {activeProcess.etaLabel ? <div className="mt-1 text-[var(--muted)]">{activeProcess.etaLabel}</div> : null}
         </div>
       ) : null}
       {data.staleCount > 0 ? (

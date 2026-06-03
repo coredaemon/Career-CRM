@@ -1,14 +1,20 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { analysisModeLabels, parseAnalysisMode, type AnalysisMode } from "@/lib/analysis-mode";
 import { AiAnalysisError } from "@/lib/ai-errors";
 import { prisma } from "@/lib/prisma";
+import { findBlockingVacancyAnalysisProcess } from "@/lib/process-queries";
+import { buildProcessRunUiState } from "@/lib/process-status";
 import {
   appendProcessLog,
   createProcessRun,
+  createProcessRunItems,
   finishProcessRun,
+  findProcessRunItem,
   isProcessStopRequested,
   startProcessRun,
-  updateProcessProgress
+  updateProcessProgress,
+  updateProcessRunItem
 } from "@/lib/process-run-service";
 import { getUserSettings } from "@/lib/settings";
 import { analyzeStoredVacancy } from "@/lib/vacancy-ai-workflow";
@@ -16,19 +22,27 @@ import { analyzeStoredVacancy } from "@/lib/vacancy-ai-workflow";
 const bulkSchema = z.object({
   vacancyIds: z.array(z.string()).optional(),
   limit: z.number().int().min(1).max(50).default(20),
-  retryErrorsOnly: z.boolean().optional().default(false)
+  retryErrorsOnly: z.boolean().optional().default(false),
+  analysisMode: z.enum(["fast", "full", "letters_only"]).optional().default("fast"),
+  force: z.boolean().optional().default(false)
 });
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
+function logPrefix(index: number, total: number) {
+  return `[${index + 1}/${total}]`;
+}
+
 async function runBulkAnalysis(
   processId: string,
+  mode: AnalysisMode,
   vacancies: Array<{
     id: string;
     title: string;
     rawDescription: string | null;
     searchProfileId: string | null;
+    status: string;
     searchProfile: { resumeId: string } | null;
   }>
 ) {
@@ -38,8 +52,11 @@ async function runBulkAnalysis(
   let coverLetters = 0;
   let recommended = 0;
   const errorMessages: string[] = [];
+  const total = vacancies.length;
 
   try {
+    let processed = 0;
+
     for (let index = 0; index < vacancies.length; index += 1) {
       const vacancy = vacancies[index];
       if (await isProcessStopRequested(processId)) {
@@ -47,41 +64,97 @@ async function runBulkAnalysis(
         break;
       }
 
+      const item = await findProcessRunItem(processId, vacancy.id);
+      const itemId = item?.id;
+
       await updateProcessProgress(processId, {
-        progressCurrent: index,
-        progressTotal: vacancies.length,
+        progressCurrent: processed,
+        progressTotal: total,
         currentStep: `analyzing:${vacancy.title}`
       });
 
+      const finishItem = async (params: {
+        status: "completed" | "error" | "skipped";
+        errorCode?: string;
+        errorMessage?: string;
+        startedAt: Date;
+      }) => {
+        if (itemId) {
+          const finishedAt = new Date();
+          await updateProcessRunItem(itemId, {
+            status: params.status,
+            errorCode: params.errorCode,
+            errorMessage: params.errorMessage,
+            startedAt: params.startedAt,
+            finishedAt,
+            durationMs: finishedAt.getTime() - params.startedAt.getTime()
+          });
+        }
+        processed += 1;
+        await updateProcessProgress(processId, {
+          progressCurrent: processed,
+          progressTotal: total
+        });
+      };
+
+      const startedAt = new Date();
+      if (itemId) {
+        await updateProcessRunItem(itemId, { status: "running", startedAt });
+      }
+
       if (!vacancy.searchProfile?.resumeId) {
         skipped += 1;
-        await appendProcessLog(processId, "warning", `Пропущено: ${vacancy.title} — нет профиля поиска.`);
+        await appendProcessLog(processId, "warning", `${logPrefix(index, total)} Пропущено: ${vacancy.title} — нет профиля поиска.`);
+        await finishItem({ status: "skipped", startedAt });
         continue;
       }
 
-      if (!vacancy.rawDescription || vacancy.rawDescription.length < 300) {
+      if (mode !== "letters_only" && (!vacancy.rawDescription || vacancy.rawDescription.length < 300)) {
         skipped += 1;
         await prisma.vacancy.update({
           where: { id: vacancy.id },
           data: { status: "needs_review", recommendation: "Не удалось извлечь полный текст вакансии. Проверьте вручную." }
         });
-        await appendProcessLog(processId, "warning", `Пропущено: ${vacancy.title} — недостаточно текста.`);
+        await appendProcessLog(processId, "warning", `${logPrefix(index, total)} Пропущено: ${vacancy.title} — недостаточно текста.`);
+        await finishItem({ status: "skipped", startedAt });
         continue;
       }
 
+      if (mode === "letters_only") {
+        const eligible =
+          (vacancy.status === "ai_recommended" || vacancy.status === "ready_to_apply") && vacancy.searchProfile?.resumeId;
+        if (!eligible) {
+          skipped += 1;
+          await appendProcessLog(processId, "warning", `${logPrefix(index, total)} Пропущено: ${vacancy.title} — не рекомендована или нет письма.`);
+          await finishItem({ status: "skipped", startedAt });
+          continue;
+        }
+      }
+
       try {
-        await appendProcessLog(processId, "info", `AI анализирует (${index + 1}/${vacancies.length}): ${vacancy.title}`);
+        await appendProcessLog(processId, "info", `${logPrefix(index, total)} Анализируем: ${vacancy.title}`);
         const result = await analyzeStoredVacancy({
           vacancyId: vacancy.id,
           resumeId: vacancy.searchProfile.resumeId,
-          searchProfileId: vacancy.searchProfileId
+          searchProfileId: vacancy.searchProfileId,
+          mode,
+          processRunId: processId,
+          onLog: async (message) => {
+            await appendProcessLog(processId, "info", `${logPrefix(index, total)} ${message}`);
+          }
         });
         analyzed += 1;
-        coverLetters += 1;
+        if (result.coverLetterCreated) coverLetters += 1;
         if (result.vacancy.status === "ready_to_apply" || result.vacancy.status === "ai_recommended") recommended += 1;
-        await appendProcessLog(processId, "success", `AI-анализ завершён: ${vacancy.title}`);
+        await appendProcessLog(
+          processId,
+          "success",
+          `${logPrefix(index, total)} Анализ завершён, score ${Math.round(result.analysis.vacancy_match_score)}.${result.coverLetterCreated ? " Письмо создано." : ""}`
+        );
+        await finishItem({ status: "completed", startedAt });
       } catch (error) {
         errors += 1;
+        const code = error instanceof AiAnalysisError ? error.code : "AI_ANALYSIS_FAILED";
         const message =
           error instanceof AiAnalysisError
             ? error.userMessage
@@ -89,16 +162,15 @@ async function runBulkAnalysis(
               ? error.message
               : "AI-анализ не удался";
         errorMessages.push(`${vacancy.title}: ${message}`);
-        await appendProcessLog(processId, "error", `Ошибка анализа: ${vacancy.title}`, {
-          code: error instanceof AiAnalysisError ? error.code : "AI_ANALYSIS_FAILED",
-          message
-        });
+        const detail =
+          code === "INVALID_AI_JSON"
+            ? "модель вернула некорректный JSON после 3 попыток"
+            : code === "AI_TIMEOUT"
+              ? "превышен таймаут 90 сек"
+              : message;
+        await appendProcessLog(processId, "error", `${logPrefix(index, total)} Ошибка: ${detail}.`, { code, message });
+        await finishItem({ status: "error", errorCode: code, errorMessage: message, startedAt });
       }
-
-      await updateProcessProgress(processId, {
-        progressCurrent: index + 1,
-        progressTotal: vacancies.length
-      });
     }
 
     const stopped = await isProcessStopRequested(processId);
@@ -110,7 +182,8 @@ async function runBulkAnalysis(
 
     await finishProcessRun(processId, {
       status: stopped ? "stopped" : errors > 0 && analyzed === 0 ? "error" : "completed",
-      errorMessage: errors > 0 ? `Ошибок анализа: ${errors}` : undefined,
+      stoppedReason: stopped ? "user" : undefined,
+      errorMessage: errors > 0 && !stopped ? `Ошибок анализа: ${errors}` : undefined,
       result: {
         analyzed,
         skipped,
@@ -120,7 +193,8 @@ async function runBulkAnalysis(
         recommended,
         recommendedCount,
         readyToApply,
-        needsReview
+        needsReview,
+        analysisMode: mode
       }
     });
   } catch (error) {
@@ -134,42 +208,84 @@ async function runBulkAnalysis(
 export async function POST(request: Request) {
   try {
     const body = bulkSchema.parse(await request.json().catch(() => ({})));
+    const mode = parseAnalysisMode(body.analysisMode);
     const settings = await getUserSettings();
     if (!settings.aiConfigured) {
       return NextResponse.json({ ok: false, message: "Сначала сохраните настройки AI." }, { status: 400 });
+    }
+
+    if (!body.force) {
+      const active = await findBlockingVacancyAnalysisProcess();
+      if (active) {
+        const state = buildProcessRunUiState(active);
+        return NextResponse.json(
+          {
+            ok: false,
+            code: "PROCESS_ALREADY_RUNNING",
+            message: `AI-анализ уже выполняется: ${state.displayCurrent} из ${state.displayTotal}`,
+            activeProcessRunId: active.id,
+            state
+          },
+          { status: 409 }
+        );
+      }
     }
 
     const vacancies = await prisma.vacancy.findMany({
       where: body.vacancyIds?.length
         ? { id: { in: body.vacancyIds } }
         : body.retryErrorsOnly
-          ? { status: "analysis_error" }
-          : {
-              OR: [{ matchScore: null }, { aiAnalysisJson: null }, { status: "analysis_error" }],
-              searchProfileId: { not: null }
-            },
+          ? { status: "analysis_error", searchProfileId: { not: null } }
+          : mode === "letters_only"
+            ? {
+                status: { in: ["ai_recommended", "ready_to_apply"] },
+                searchProfileId: { not: null },
+                coverLetters: { none: {} }
+              }
+            : {
+                OR: [{ matchScore: null }, { aiAnalysisJson: null }, { status: "analysis_error" }],
+                searchProfileId: { not: null }
+              },
       take: body.limit,
       orderBy: { createdAt: "asc" },
       include: { searchProfile: true }
     });
 
+    const title =
+      mode === "letters_only"
+        ? "Создание писем для рекомендованных"
+        : body.retryErrorsOnly
+          ? "Повтор ошибок AI-анализа"
+          : "Массовый AI-анализ вакансий";
+
     const process = await createProcessRun({
       type: "vacancy_analysis",
-      title: body.retryErrorsOnly ? "Повтор ошибок AI-анализа" : "Массовый AI-анализ вакансий",
+      title,
       description: `Выбрано вакансий: ${vacancies.length}`,
       progressTotal: vacancies.length,
-      metadata: { retryErrorsOnly: body.retryErrorsOnly }
+      analysisMode: mode,
+      metadata: { retryErrorsOnly: body.retryErrorsOnly, analysisMode: mode }
     });
 
-    await startProcessRun(process.id, "preparing");
-    await appendProcessLog(process.id, "info", `Запуск AI-анализа: ${vacancies.length} вакансий.`);
+    await createProcessRunItems(
+      process.id,
+      vacancies.map((v) => ({ vacancyId: v.id, title: v.title }))
+    );
 
-    void runBulkAnalysis(process.id, vacancies);
+    await startProcessRun(process.id, "preparing");
+    await appendProcessLog(
+      process.id,
+      "info",
+      `Запущен массовый AI-анализ: ${vacancies.length} вакансий, режим ${analysisModeLabels[mode]}.`
+    );
+
+    void runBulkAnalysis(process.id, mode, vacancies);
 
     return NextResponse.json({
       ok: true,
       processRunId: process.id,
-      total: vacancies.length
+      total: vacancies.length,
+      analysisMode: mode
     });
   } catch (error) {
     return NextResponse.json(

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { AiAnalysisError, INVALID_AI_JSON_MESSAGE } from "@/lib/ai-errors";
-import { callAiRouter, logAiCallError } from "@/lib/ai-router";
+import { type AiRouterContext, callAiRouter, logAiCallError, logAiCallSuccess } from "@/lib/ai-router";
 import { chooseModelForRole, providerPresets } from "@/lib/ai-presets";
 import { extractJsonFromAiResponse } from "@/lib/extract-json";
 
@@ -222,6 +222,7 @@ export async function analyzeVacancyWithAi(params: {
   resumeText: string;
   searchProfile: Record<string, unknown> | null;
   vacancy: Record<string, unknown>;
+  context?: AiRouterContext;
 }) {
   const baseMessages: ChatMessage[] = [
     {
@@ -247,6 +248,7 @@ ${JSON.stringify(params.vacancy, null, 2)}`
   let lastRaw = "";
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    const startedAt = new Date();
     const result = await callAiRouter({
       role: "analysis",
       taskType: "vacancy_analysis",
@@ -262,7 +264,9 @@ ${JSON.stringify(params.vacancy, null, 2)}`
               }
             ],
       responseFormat: "json",
-      temperature: attempt === 0 ? 0.15 : 0.05
+      temperature: attempt === 0 ? 0.15 : 0.05,
+      context: { ...params.context, attemptNumber: attempt + 1 },
+      deferSuccessLog: true
     });
 
     lastRaw = result.content;
@@ -270,6 +274,16 @@ ${JSON.stringify(params.vacancy, null, 2)}`
     try {
       const jsonText = extractJsonFromAiResponse(result.content);
       if (!jsonText) throw new Error("INVALID_AI_JSON");
+      await logAiCallSuccess({
+        taskType: "vacancy_analysis",
+        provider: result.provider,
+        model: result.model,
+        role: result.role,
+        usage: result.usage,
+        context: { ...params.context, attemptNumber: attempt + 1 },
+        startedAt,
+        finishedAt: new Date()
+      });
       return {
         analysis: vacancyAnalysisSchema.parse(JSON.parse(jsonText)),
         meta: { provider: result.provider, model: result.model, role: result.role }
@@ -282,7 +296,8 @@ ${JSON.stringify(params.vacancy, null, 2)}`
           model: result.model,
           role: result.role,
           errorCode: "INVALID_AI_JSON",
-          errorMessage: "AI вернул невалидный JSON анализа вакансии."
+          errorMessage: "AI вернул невалидный JSON анализа вакансии.",
+          context: { ...params.context, attemptNumber: attempt + 1 }
         });
         throw new AiAnalysisError({
           code: "INVALID_AI_JSON",
@@ -305,11 +320,13 @@ async function parseRouterJson<T>(params: {
   schema: z.ZodType<T>;
   messages: ChatMessage[];
   temperatures?: number[];
+  context?: AiRouterContext;
 }) {
   const temperatures = params.temperatures ?? [0.15, 0.05];
   let lastMeta: { provider: string; model: string; role: string } | null = null;
 
   for (let attempt = 0; attempt < temperatures.length; attempt += 1) {
+    const startedAt = new Date();
     const result = await callAiRouter({
       role: params.role,
       taskType: params.taskType,
@@ -324,13 +341,26 @@ async function parseRouterJson<T>(params: {
               }
             ],
       responseFormat: "json",
-      temperature: temperatures[attempt]
+      temperature: temperatures[attempt],
+      context: { ...params.context, attemptNumber: attempt + 1 },
+      deferSuccessLog: true
     });
     lastMeta = { provider: result.provider, model: result.model, role: result.role };
     const jsonText = extractJsonFromAiResponse(result.content);
     if (jsonText) {
       try {
-        return { value: params.schema.parse(JSON.parse(jsonText)), meta: lastMeta };
+        const value = params.schema.parse(JSON.parse(jsonText));
+        await logAiCallSuccess({
+          taskType: params.taskType,
+          provider: result.provider,
+          model: result.model,
+          role: params.role,
+          usage: result.usage,
+          context: { ...params.context, attemptNumber: attempt + 1 },
+          startedAt,
+          finishedAt: new Date()
+        });
+        return { value, meta: lastMeta };
       } catch {
         // retry
       }
@@ -344,7 +374,8 @@ async function parseRouterJson<T>(params: {
       model: lastMeta.model,
       role: params.role,
       errorCode: "INVALID_AI_JSON",
-      errorMessage: "AI вернул невалидный JSON."
+      errorMessage: "AI вернул невалидный JSON.",
+      context: params.context
     });
   }
 
@@ -354,12 +385,17 @@ async function parseRouterJson<T>(params: {
   });
 }
 
-export async function reviewVacancyAnalysisWithAi(params: { analysis: VacancyAnalysis; vacancy: Record<string, unknown> }) {
+export async function reviewVacancyAnalysisWithAi(params: {
+  analysis: VacancyAnalysis;
+  vacancy: Record<string, unknown>;
+  context?: AiRouterContext;
+}) {
   const parsed = await parseRouterJson({
     role: "reviewer",
     taskType: "vacancy_review",
     schema: reviewerSchema,
     temperatures: [0.1, 0.05],
+    context: params.context,
     messages: [
       { role: "system", content: "Ты проверяешь спорный AI-анализ вакансии. Верни только JSON. Не придумывай факты." },
       {
@@ -387,6 +423,7 @@ export async function generateCoverLetterWithAi(params: {
   vacancy: { title: string; companyName?: string | null; rawDescription?: string | null; aiAnalysisJson?: string | null };
   analysis: VacancyAnalysis;
   instruction?: string;
+  context?: AiRouterContext;
 }) {
   const resumeFacts = [
     params.resumeText.slice(0, 2500),
@@ -411,6 +448,7 @@ export async function generateCoverLetterWithAi(params: {
     taskType: "cover_letter",
     schema: z.object({ cover_letter: z.string().min(1) }),
     temperatures: [0.25, 0.1],
+    context: params.context,
     messages: [
       {
         role: "system",
