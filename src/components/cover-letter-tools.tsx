@@ -4,7 +4,14 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui";
 
-const toneOptions = ["короче", "увереннее", "мягче", "больше акцент на управление", "больше акцент на аналитику"];
+const toneOptions = [
+  "короче",
+  "увереннее",
+  "мягче",
+  "больше акцент на управление",
+  "больше акцент на судебную работу",
+  "больше акцент на договорную работу"
+];
 
 export function CoverLetterTools({ vacancyId, resumeId, disabled }: { vacancyId: string; resumeId?: string; disabled?: boolean }) {
   const router = useRouter();

@@ -15,6 +15,7 @@ export default async function RecommendedVacanciesPage() {
     orderBy: [{ matchScore: "desc" }, { createdAt: "desc" }],
     include: {
       company: true,
+      searchProfile: true,
       coverLetters: { orderBy: { createdAt: "desc" }, take: 1 }
     }
   });
@@ -73,7 +74,16 @@ export default async function RecommendedVacanciesPage() {
                 ) : null}
                 <div className="mt-4 flex flex-wrap gap-2">
                   {letter ? <CopyButton text={letter} label="Скопировать письмо" /> : null}
-                  <VacancyQuickActions vacancyId={vacancy.id} sourceUrl={vacancy.sourceUrl} />
+                  <VacancyQuickActions
+                    vacancyId={vacancy.id}
+                    status={vacancy.status}
+                    sourceUrl={vacancy.sourceUrl}
+                    hasCoverLetter={Boolean(letter)}
+                    hasAiAnalysis={Boolean(vacancy.aiAnalysisJson)}
+                    matchScore={vacancy.matchScore}
+                    coverLetterText={letter}
+                    resumeId={vacancy.searchProfile?.resumeId ?? vacancy.coverLetters[0]?.resumeId}
+                  />
                 </div>
               </Card>
             );

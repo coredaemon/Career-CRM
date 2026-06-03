@@ -16,7 +16,8 @@ import { AiAnalysisError, INVALID_VACANCY_SOURCE_MESSAGE } from "@/lib/ai-errors
 import { fromJsonText } from "@/lib/json";
 import { prepareVacancyTextForAi } from "@/lib/prepare-vacancy-text";
 import { prisma } from "@/lib/prisma";
-import { statusFromAiAnalysis } from "@/lib/vacancy-status";
+import { statusAfterCoverLetterCreated } from "@/lib/vacancy-application-queue";
+import { statusFromAiAnalysis, vacancyStatusLabel } from "@/lib/vacancy-status";
 import { vacancyAnalysisStorage } from "@/lib/vacancy-service";
 import { validateVacancyDraft } from "@/lib/vacancy-validation";
 
@@ -261,11 +262,19 @@ export async function analyzeStoredVacancy(params: {
     score: analysis!.vacancy_match_score
   });
 
+  const letterCreated = Boolean(coverLetterText && !existingLetter);
+  const statusAfterLetter =
+    letterCreated && analysis
+      ? statusAfterCoverLetterCreated(analysis, vacancy.status) ?? (mode === "letters_only" ? null : status)
+      : null;
+  const finalStatus =
+    statusAfterLetter ?? (mode === "letters_only" ? vacancy.status : status);
+
   const updated = await prisma.$transaction(async (tx) => {
     const updatedVacancy = await tx.vacancy.update({
       where: { id: vacancy.id },
       data: {
-        status: mode === "letters_only" ? vacancy.status : status,
+        status: finalStatus,
         analysisErrorCode: null,
         analysisErrorMessage: null,
         ...(mode !== "letters_only" ? vacancyAnalysisStorage(analysis!) : {}),
@@ -313,7 +322,17 @@ export async function analyzeStoredVacancy(params: {
         companyId: vacancy.companyId,
         type: "status_changed",
         occurredAt: new Date(),
-        summary: `Статус установлен после AI-анализа: ${status}.`
+        summary: `Статус установлен после AI-анализа: ${vacancyStatusLabel(status)}.`
+      });
+    }
+
+    if (statusAfterLetter && statusAfterLetter !== vacancy.status) {
+      interactions.push({
+        vacancyId: vacancy.id,
+        companyId: vacancy.companyId,
+        type: "status_changed",
+        occurredAt: new Date(),
+        summary: `Статус после создания письма: ${vacancyStatusLabel(statusAfterLetter)}.`
       });
     }
 

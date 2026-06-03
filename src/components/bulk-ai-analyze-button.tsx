@@ -43,11 +43,13 @@ type ActiveResponse = {
 export function BulkAiAnalyzeButton({
   label = "Проанализировать непроанализированные",
   retryErrorsOnly = false,
-  defaultMode = "fast" as AnalysisMode
+  defaultMode = "fast" as AnalysisMode,
+  lettersOnlyDirect = false
 }: {
   label?: string;
   retryErrorsOnly?: boolean;
   defaultMode?: AnalysisMode;
+  lettersOnlyDirect?: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -135,6 +137,10 @@ export function BulkAiAnalyzeButton({
   function onPrimaryClick() {
     if (retryErrorsOnly) {
       void analyze("fast");
+      return;
+    }
+    if (lettersOnlyDirect) {
+      void analyze("letters_only");
       return;
     }
     setConfirmFull(false);

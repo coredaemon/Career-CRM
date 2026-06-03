@@ -19,6 +19,19 @@ CareerOS does not send applications automatically, does not store hh login/passw
 - Open recommended vacancies, copy cover letters, and apply manually on hh.
 - Mark applications as sent and let CareerOS schedule a follow-up check.
 
+## Manual application after fast AI analysis
+
+CareerOS never sends applications to hh automatically. After search and **fast** bulk analysis:
+
+1. **AI рекомендует** — vacancies with score and AI breakdown appear on the **AI рекомендует** tab.
+2. **Create cover letters** — on a vacancy page use **Создать сопроводительное письмо**, or on **Вакансии** use **Создать письма для рекомендованных** (bulk `letters_only` process). Letters use the writer model, your resume, confirmed facts, and the stored AI analysis.
+3. **Готово к отклику** — vacancies with a cover letter (status `ready_to_apply` or `ai_recommended` + letter) appear on this tab. Open hh, copy the letter, and apply manually.
+4. **Mark as sent** — click **Отклик отправлен** (with confirmation if there is no letter). CareerOS sets status `applied`, creates an **Application**, and schedules **проверить ответ** in 5 days.
+5. **Отклики** (`/applications`) — track sent applications, days until check, and actions: **Ответили**, **Отказ**, **Нет ответа**, **Написать follow-up** (copy template from the vacancy page).
+6. **Follow-up** — templates on the vacancy page use the real vacancy title (not placeholder junk). Copy and send manually.
+
+Recommended vacancies **without** a letter stay on **AI рекомендует** only; they do not appear under **Готово к отклику** until a letter exists.
+
 ## Public Repository Safety
 
 This repository is public and must not contain user data.

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CopyButton } from "@/components/copy-button";
+import { CreateCoverLetterButton } from "@/components/create-cover-letter-button";
 import { CoverLetterTools } from "@/components/cover-letter-tools";
 import { InvalidVacancyPanel } from "@/components/invalid-vacancy-panel";
 import { VacancyAiErrorPanel } from "@/components/vacancy-ai-error-panel";
@@ -11,6 +12,8 @@ import { Card, PageHeader } from "@/components/ui";
 import { fromJsonText } from "@/lib/json";
 import { prisma } from "@/lib/prisma";
 import { validateVacancyDraft } from "@/lib/vacancy-validation";
+import { buildFollowUpText } from "@/lib/follow-up";
+import { isEligibleForCoverLetter } from "@/lib/vacancy-application-queue";
 import { vacancyStatusLabel } from "@/lib/vacancy-status";
 
 export const dynamic = "force-dynamic";
@@ -60,6 +63,14 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
 
   const analysis = fromJsonText<VacancyAnalysisView>(vacancy.aiAnalysisJson, {});
   const latestLetter = vacancy.coverLetters[0];
+  const resumeId = latestLetter?.resumeId || vacancy.searchProfile?.resumeId;
+  const showCreateLetter = isEligibleForCoverLetter({
+    status: vacancy.status,
+    matchScore: vacancy.matchScore,
+    aiAnalysisJson: vacancy.aiAnalysisJson,
+    hasLetter: Boolean(latestLetter),
+    isInvalid: isInvalidSource
+  });
   const followUpText = buildFollowUpText(vacancy);
   const aiMeta = fromJsonText<{
     analysis?: { provider?: string; model?: string };
@@ -161,8 +172,15 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
                   <CoverLetterTools vacancyId={vacancy.id} resumeId={latestLetter.resumeId} />
                 </div>
               </>
+            ) : showCreateLetter ? (
+              <div className="mt-4">
+                <p className="text-sm text-[var(--muted)]">Создайте письмо на основе AI-разбора, резюме и подтверждённых фактов.</p>
+                <div className="mt-4">
+                  <CreateCoverLetterButton vacancyId={vacancy.id} resumeId={resumeId} />
+                </div>
+              </div>
             ) : (
-              <p className="mt-3 text-sm text-[var(--muted)]">Письмо ещё не создано. Оно появится после AI-анализа или перегенерации.</p>
+              <p className="mt-3 text-sm text-[var(--muted)]">Письмо ещё не создано. Сначала выполните AI-анализ вакансии.</p>
             )}
           </Card>
 
@@ -217,7 +235,17 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
           </Card>
           <Card>
             <h2 className="mb-3 text-lg font-semibold tracking-normal">Быстрые действия</h2>
-            <VacancyQuickActions vacancyId={vacancy.id} sourceUrl={vacancy.sourceUrl} hideApply={isInvalidSource} />
+            <VacancyQuickActions
+              vacancyId={vacancy.id}
+              status={vacancy.status}
+              sourceUrl={vacancy.sourceUrl}
+              hasCoverLetter={Boolean(latestLetter)}
+              hasAiAnalysis={Boolean(vacancy.aiAnalysisJson)}
+              matchScore={vacancy.matchScore}
+              coverLetterText={latestLetter?.text}
+              resumeId={resumeId}
+              hideApply={isInvalidSource}
+            />
           </Card>
           <Card>
             <h2 className="mb-3 text-lg font-semibold tracking-normal">AI-анализ</h2>
@@ -291,23 +319,8 @@ function interactionTypeLabel(type: string) {
     vacancy_created: "Вакансия создана",
     vacancy_analyzed: "Вакансия проанализирована",
     cover_letter_created: "Сопроводительное письмо создано",
-    status_changed: "Статус изменён"
+    status_changed: "Статус изменён",
+    application_sent_manually: "Отклик отправлен вручную"
   };
   return labels[type] ?? type;
-}
-
-function buildFollowUpText(vacancy: {
-  title: string;
-  status: string;
-  testStatus: string | null;
-}) {
-  if (vacancy.testStatus === "пройдено" || vacancy.testStatus === "отправлено") {
-    return `Здравствуйте. Я прошёл тестирование по вакансии «${vacancy.title}». Хотел уточнить, удалось ли его посмотреть и есть ли решение по дальнейшим этапам. Буду благодарен за обратную связь.`;
-  }
-
-  if (vacancy.status === "waiting_response" || vacancy.status === "no_response") {
-    return `Здравствуйте. Недавно направлял отклик на вакансию «${vacancy.title}». Хотел уточнить, актуальна ли ещё позиция и рассматривается ли моё резюме. Буду благодарен за обратную связь.`;
-  }
-
-  return `Здравствуйте. Хотел уточнить статус рассмотрения по вакансии «${vacancy.title}». Буду благодарен за обратную связь.`;
 }

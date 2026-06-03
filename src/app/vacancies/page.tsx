@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Prisma } from "@prisma/client";
 import { BulkAiAnalyzeButton } from "@/components/bulk-ai-analyze-button";
+import { BulkCreateLettersButton } from "@/components/bulk-create-letters-button";
 import { JunkVacancyActions } from "@/components/junk-vacancy-actions";
 import { getActiveProcessesSummary } from "@/lib/active-processes";
 import { countVacanciesEligibleForBulk } from "@/lib/process-queries";
@@ -12,6 +13,7 @@ import { Card, EmptyState, LinkButton, PageHeader } from "@/components/ui";
 import { fromJsonText } from "@/lib/json";
 import { prisma } from "@/lib/prisma";
 import { isVacancyJunkForList, vacancyEligibleForNoAiTab } from "@/lib/vacancy-analysis-eligibility";
+import { recommendedWithoutLetterWhere, readyToApplyTabWhere } from "@/lib/vacancy-application-queue";
 import { vacancyStatusLabel } from "@/lib/vacancy-status";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +38,7 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
     orderBy: { createdAt: "desc" },
     include: {
       company: true,
+      searchProfile: true,
       coverLetters: { orderBy: { createdAt: "desc" }, take: 1 }
     }
   });
@@ -56,14 +59,17 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
         )
       : rawVacancies;
 
-  const [totalVacancies, withoutAi, eligibleForBulk, analysisErrors, lastSearchRun, activeSummary] = await Promise.all([
-    prisma.vacancy.count(),
-    prisma.vacancy.count({ where: { OR: [{ matchScore: null }, { aiAnalysisJson: null }] } }),
-    countVacanciesEligibleForBulk(),
-    prisma.vacancy.count({ where: { status: "analysis_error" } }),
-    prisma.searchRun.findFirst({ orderBy: { startedAt: "desc" }, select: { id: true } }),
-    getActiveProcessesSummary()
-  ]);
+  const [totalVacancies, withoutAi, eligibleForBulk, analysisErrors, lastSearchRun, activeSummary, recommendedWithoutLetter, readyWithLetter] =
+    await Promise.all([
+      prisma.vacancy.count(),
+      prisma.vacancy.count({ where: { OR: [{ matchScore: null }, { aiAnalysisJson: null }] } }),
+      countVacanciesEligibleForBulk(),
+      prisma.vacancy.count({ where: { status: "analysis_error" } }),
+      prisma.searchRun.findFirst({ orderBy: { startedAt: "desc" }, select: { id: true } }),
+      getActiveProcessesSummary(),
+      prisma.vacancy.count({ where: recommendedWithoutLetterWhere() }),
+      prisma.vacancy.count({ where: readyToApplyTabWhere() })
+    ]);
 
   return (
     <>
@@ -121,6 +127,20 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
         </Card>
       ) : null}
 
+      {recommendedWithoutLetter > 0 ? (
+        <Card className="mb-5 border-[var(--accent)]">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold tracking-normal">Есть рекомендованные вакансии без писем</h2>
+              <p className="mt-1 text-sm text-[var(--muted)]">
+                AI рекомендует без письма: {recommendedWithoutLetter} · Готово к отклику (с письмом): {readyWithLetter}
+              </p>
+            </div>
+            <BulkCreateLettersButton />
+          </div>
+        </Card>
+      ) : null}
+
       {analysisErrors > 0 ? (
         <Card className="mb-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -145,10 +165,14 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
 
       {vacancies.length === 0 ? (
         <EmptyState
-          title={emptyTitle(totalVacancies, status, withoutAi)}
-          description={emptyDescription(totalVacancies, status, withoutAi)}
+          title={emptyTitle(totalVacancies, status, withoutAi, recommendedWithoutLetter)}
+          description={emptyDescription(totalVacancies, status, withoutAi, recommendedWithoutLetter)}
           actions={
-            status === "ai_recommended" && withoutAi > 0 ? (
+            status === "ready_to_apply" && recommendedWithoutLetter > 0 ? (
+              <div className="mt-4">
+                <BulkCreateLettersButton />
+              </div>
+            ) : status === "ai_recommended" && withoutAi > 0 ? (
               <div className="mt-4 flex flex-wrap gap-2">
                 <BulkAiAnalyzeButton />
                 <BulkAiAnalyzeButton label="Повторить ошибки AI" retryErrorsOnly />
@@ -210,7 +234,18 @@ export default async function VacanciesPage({ searchParams }: { searchParams: Pr
                   </Link>
                   {vacancy.sourceUrl ? <CopyButton text={vacancy.sourceUrl} label="Скопировать ссылку" /> : null}
                   {latestLetter && !hideApplyActions ? <CopyButton text={latestLetter} label="Скопировать письмо" /> : null}
-                  <VacancyQuickActions vacancyId={vacancy.id} sourceUrl={vacancy.sourceUrl} hideApply={hideApplyActions} />
+                  <VacancyQuickActions
+                    vacancyId={vacancy.id}
+                    status={vacancy.status}
+                    sourceUrl={vacancy.sourceUrl}
+                    hasCoverLetter={Boolean(latestLetter)}
+                    hasAiAnalysis={Boolean(vacancy.aiAnalysisJson)}
+                    matchScore={vacancy.matchScore}
+                    coverLetterText={latestLetter}
+                    resumeId={vacancy.searchProfile?.resumeId ?? vacancy.coverLetters[0]?.resumeId}
+                    hideApply={hideApplyActions}
+                    showOpenLink={false}
+                  />
                   {!hideApplyActions ? <VacancyAiRetryButton vacancyId={vacancy.id} /> : null}
                   <div className="min-w-56">
                     <VacancyStatusSelect vacancyId={vacancy.id} currentStatus={vacancy.status} />
@@ -233,25 +268,30 @@ function vacancyWhere(status?: string): Prisma.VacancyWhereInput | undefined {
   if (status === "ai_recommended") return { status: "ai_recommended" };
   if (status === "analysis_error") return { status: "analysis_error" };
   if (status === "ready_to_apply") {
-    return {
-      status: "ready_to_apply",
-      coverLetters: { some: {} }
-    };
+    return readyToApplyTabWhere();
   }
   return { status };
 }
 
-function emptyTitle(totalVacancies: number, status?: string, withoutAi?: number) {
+function emptyTitle(totalVacancies: number, status?: string, withoutAi?: number, recommendedWithoutLetter?: number) {
   if (totalVacancies === 0) return "Вакансий пока нет";
   if (status === "ai_recommended" && withoutAi) return "Рекомендованных пока нет";
   if (status === "no_ai") return "Все вакансии уже проанализированы";
+  if (status === "ready_to_apply" && recommendedWithoutLetter) {
+    return "Есть рекомендованные, но писем ещё нет";
+  }
+  if (status === "ready_to_apply") return "Пока нет вакансий, готовых к отклику";
   return "В этой вкладке пока пусто";
 }
 
-function emptyDescription(totalVacancies: number, status?: string, withoutAi?: number) {
+function emptyDescription(totalVacancies: number, status?: string, withoutAi?: number, recommendedWithoutLetter?: number) {
   if (totalVacancies === 0) return "Запустите поиск вакансий или добавьте вакансию вручную.";
   if (status === "ai_recommended" && withoutAi) return "Есть собранные вакансии без AI-анализа. Запустите анализ, чтобы получить рекомендации.";
   if (status === "no_ai") return "Новых вакансий без AI-анализа нет.";
+  if (status === "ready_to_apply" && recommendedWithoutLetter) {
+    return "Есть рекомендованные вакансии, но для них ещё не созданы сопроводительные письма.";
+  }
+  if (status === "ready_to_apply") return "Запустите быстрый AI-анализ, затем создайте письма для рекомендованных.";
   return "Попробуйте другой фильтр или запустите AI-анализ для собранных вакансий.";
 }
 

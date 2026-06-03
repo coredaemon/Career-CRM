@@ -19,6 +19,7 @@ import {
 } from "@/lib/process-run-service";
 import { getUserSettings } from "@/lib/settings";
 import { isVacancyValidForAnalysis } from "@/lib/vacancy-analysis-eligibility";
+import { isEligibleForBulkCoverLetter, recommendedWithoutLetterWhere } from "@/lib/vacancy-application-queue";
 import { analyzeStoredVacancy } from "@/lib/vacancy-ai-workflow";
 
 const bulkSchema = z.object({
@@ -45,6 +46,8 @@ type BulkVacancy = {
   rawDescription: string | null;
   searchProfileId: string | null;
   status: string;
+  matchScore: number | null;
+  aiAnalysisJson: string | null;
   searchProfile: { resumeId: string } | null;
   company: { name: string | null } | null;
 };
@@ -143,7 +146,13 @@ async function runBulkAnalysis(processId: string, mode: AnalysisMode, vacancies:
 
       if (mode === "letters_only") {
         const eligible =
-          (vacancy.status === "ai_recommended" || vacancy.status === "ready_to_apply") && vacancy.searchProfile?.resumeId;
+          vacancy.searchProfile?.resumeId &&
+          isEligibleForBulkCoverLetter({
+            status: vacancy.status,
+            matchScore: vacancy.matchScore,
+            aiAnalysisJson: vacancy.aiAnalysisJson,
+            hasLetter: false
+          });
         if (!eligible) {
           skipped += 1;
           await appendProcessLog(processId, "warning", `${logPrefix(index, total)} Пропущено: ${vacancy.title} — не рекомендована.`);
@@ -246,9 +255,8 @@ function bulkWhere(body: z.infer<typeof bulkSchema>) {
   }
   if (body.analysisMode === "letters_only") {
     return {
-      status: { in: ["ai_recommended", "ready_to_apply"] },
-      searchProfileId: { not: null },
-      coverLetters: { none: {} }
+      ...recommendedWithoutLetterWhere(),
+      searchProfileId: { not: null }
     };
   }
   return vacancyEligibleForBulkWhere();
@@ -292,7 +300,24 @@ export async function POST(request: Request) {
 
     for (const vacancy of candidates) {
       if (validVacancies.length >= body.limit) break;
-      if (mode !== "letters_only") {
+      if (mode === "letters_only") {
+        if (
+          !isEligibleForBulkCoverLetter({
+            status: vacancy.status,
+            matchScore: vacancy.matchScore,
+            aiAnalysisJson: vacancy.aiAnalysisJson,
+            hasLetter: false
+          })
+        ) {
+          invalidCount += 1;
+          continue;
+        }
+        const validation = isVacancyValidForAnalysis(vacancy);
+        if (!validation.ok) {
+          invalidCount += 1;
+          continue;
+        }
+      } else {
         const validation = isVacancyValidForAnalysis(vacancy);
         if (!validation.ok) {
           invalidCount += 1;
