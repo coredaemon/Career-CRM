@@ -12,6 +12,7 @@ export const dynamic = "force-dynamic";
 
 type VacancyAnalysisView = {
   summary?: string;
+  confidence?: string;
   why_matches?: string[];
   weak_matches?: string[];
   red_flags?: string[];
@@ -44,6 +45,11 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
   const analysis = fromJsonText<VacancyAnalysisView>(vacancy.aiAnalysisJson, {});
   const latestLetter = vacancy.coverLetters[0];
   const followUpText = buildFollowUpText(vacancy);
+  const aiMeta = fromJsonText<{
+    analysis?: { provider?: string; model?: string };
+    writer?: { provider?: string; model?: string };
+    reviewer?: { provider?: string; model?: string } | null;
+  }>(vacancy.aiMetaJson, {});
 
   return (
     <>
@@ -79,6 +85,11 @@ export default async function VacancyDetailPage({ params }: { params: Promise<{ 
           <Card>
             <h2 className="text-xl font-semibold tracking-normal">AI-разбор</h2>
             <div className="mt-4 text-4xl font-semibold tracking-normal">{vacancy.matchScore ?? "—"}</div>
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              Уверенность: {confidenceLabel(analysis.confidence)} · Аналитик: {aiMeta.analysis?.model || "не указан"} · Писатель:{" "}
+              {aiMeta.writer?.model || "не указан"}
+              {aiMeta.reviewer ? ` · Проверяющий: ${aiMeta.reviewer.model}` : ""}
+            </p>
             <p className="mt-3 text-sm leading-6 text-[var(--muted)]">{analysis.summary || "AI-анализ ещё не выполнялся."}</p>
             <List title="Почему подходит" items={analysis.why_matches} />
             <List title="Слабые совпадения" items={analysis.weak_matches} />
@@ -213,6 +224,12 @@ function sourceLabel(source: string) {
   if (source === "manual") return "ручной ввод";
   if (source === "other") return "другой источник";
   return source;
+}
+
+function confidenceLabel(confidence?: string) {
+  if (confidence === "low") return "низкая";
+  if (confidence === "high") return "высокая";
+  return "средняя";
 }
 
 function interactionTypeLabel(type: string) {

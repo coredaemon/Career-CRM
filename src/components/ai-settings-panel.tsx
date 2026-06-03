@@ -1,246 +1,298 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { aiProviderPresets } from "@/lib/ai";
+import { useEffect, useState } from "react";
+import { providerPresets } from "@/lib/ai-presets";
 import { Button, Card, Field, inputClass } from "@/components/ui";
 
-type AiForm = {
-  aiProvider: string;
-  aiBaseUrl: string;
-  aiApiKey: string;
-  aiPrimaryModel: string;
-  aiFastModel: string;
+type Contour = "analysis" | "writer";
+
+type ContourState = {
+  provider: string;
+  baseUrl: string;
+  apiKey: string;
+  primaryModel: string;
+  secondaryModel: string;
+  hasKey: boolean;
+  keyMask: string;
+  models: string[];
+  showAdvanced: boolean;
+  replaceKey: boolean;
 };
 
-type AiSettingsPanelProps = {
-  compact?: boolean;
-  onSaved?: (settings: AiForm) => void;
-};
+const deepseek = providerPresets.find((item) => item.id === "deepseek")!;
+const openai = providerPresets.find((item) => item.id === "openai")!;
+const compatible = providerPresets.find((item) => item.id === "compatible")!;
 
-const initialForm: AiForm = {
-  aiProvider: "openai",
-  aiBaseUrl: "https://api.openai.com/v1",
-  aiApiKey: "",
-  aiPrimaryModel: "gpt-4.1",
-  aiFastModel: "gpt-4.1-mini"
-};
+function initialContour(preset: typeof deepseek, primary = "", secondary = ""): ContourState {
+  return {
+    provider: preset.id,
+    baseUrl: preset.baseUrl,
+    apiKey: "",
+    primaryModel: primary || preset.defaults.analysis || preset.defaults.writer || "",
+    secondaryModel: secondary || preset.defaults.fast || preset.defaults.reviewer || "",
+    hasKey: false,
+    keyMask: "",
+    models: [],
+    showAdvanced: false,
+    replaceKey: true
+  };
+}
 
-export function AiSettingsPanel({ compact, onSaved }: AiSettingsPanelProps) {
-  const [form, setForm] = useState<AiForm>(initialForm);
-  const [models, setModels] = useState<string[]>([]);
+export function AiSettingsPanel({ onSaved }: { compact?: boolean; onSaved?: () => void }) {
+  const [analysis, setAnalysis] = useState<ContourState>(initialContour(deepseek, "deepseek-v4-flash", "deepseek-v4-flash"));
+  const [writer, setWriter] = useState<ContourState>(initialContour(openai, "gpt-5.4-mini", "gpt-5.4-mini"));
+  const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState<"test" | "save" | null>(null);
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [hasSavedKey, setHasSavedKey] = useState(false);
-  const [keyMask, setKeyMask] = useState("");
-  const [replaceKey, setReplaceKey] = useState(true);
-
-  const provider = useMemo(
-    () => aiProviderPresets.find((item) => item.id === form.aiProvider) ?? aiProviderPresets[0],
-    [form.aiProvider]
-  );
 
   useEffect(() => {
     fetch("/api/settings/ai")
       .then((response) => response.json())
       .then((data) => {
-        const preset = aiProviderPresets.find((item) => item.id === data.aiProvider) ?? aiProviderPresets[0];
-        setHasSavedKey(Boolean(data.hasApiKey));
-        setKeyMask(data.apiKeyMask || "");
-        setReplaceKey(!data.hasApiKey);
-        setForm({
-          aiProvider: data.aiProvider || preset.id,
-          aiBaseUrl: data.aiBaseUrl || preset.baseUrl,
-          aiApiKey: "",
-          aiPrimaryModel: data.aiPrimaryModel || preset.defaultPrimaryModel,
-          aiFastModel: data.aiFastModel || preset.defaultFastModel
-        });
+        setAnalysis((current) => ({
+          ...current,
+          provider: data.analysisProvider || "deepseek",
+          baseUrl: data.analysisBaseUrl || deepseek.baseUrl,
+          primaryModel: data.analysisModel || "deepseek-v4-flash",
+          secondaryModel: data.fastModel || "deepseek-v4-flash",
+          hasKey: Boolean(data.hasAnalysisKey),
+          keyMask: data.analysisKeyMask || "",
+          replaceKey: !data.hasAnalysisKey
+        }));
+        setWriter((current) => ({
+          ...current,
+          provider: data.writerProvider || "openai",
+          baseUrl: data.writerBaseUrl || openai.baseUrl,
+          primaryModel: data.writerModel || "gpt-5.4-mini",
+          secondaryModel: data.reviewerModel || "gpt-5.4-mini",
+          hasKey: Boolean(data.hasWriterKey),
+          keyMask: data.writerKeyMask || "",
+          replaceKey: !data.hasWriterKey
+        }));
       })
-      .catch(() => {
-        setMessage("Не удалось загрузить сохранённые настройки AI.");
-      });
+      .catch(() => setMessage("Не удалось загрузить настройки AI."));
   }, []);
 
-  function selectProvider(providerId: string) {
-    const next = aiProviderPresets.find((item) => item.id === providerId) ?? aiProviderPresets[0];
-    setModels([]);
-    setMessage(next.enabled ? "" : "Google Gemini появится позже. Сейчас выберите OpenAI, DeepSeek или OpenAI-совместимый API.");
-    setForm((current) => ({
+  function selectProvider(contour: Contour, provider: string) {
+    const preset = providerPresets.find((item) => item.id === provider) ?? compatible;
+    const updater = contour === "analysis" ? setAnalysis : setWriter;
+    const primaryRole = contour === "analysis" ? "analysis" : "writer";
+    const secondaryRole = contour === "analysis" ? "fast" : "reviewer";
+    updater((current) => ({
       ...current,
-      aiProvider: next.id,
-      aiBaseUrl: next.baseUrl,
-      aiPrimaryModel: next.defaultPrimaryModel,
-      aiFastModel: next.defaultFastModel
+      provider,
+      baseUrl: preset.baseUrl,
+      primaryModel: preset.defaults[primaryRole] || "",
+      secondaryModel: preset.defaults[secondaryRole] || "",
+      models: [],
+      showAdvanced: provider === "compatible"
     }));
-    setShowAdvanced(next.id === "compatible");
   }
 
-  async function testKey() {
-    setBusy("test");
+  async function testContour(contour: Contour) {
+    const state = contour === "analysis" ? analysis : writer;
+    setBusy(contour);
     setMessage("");
     const response = await fetch("/api/settings/ai/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form)
+      body: JSON.stringify({
+        contour,
+        provider: state.provider,
+        baseUrl: state.baseUrl,
+        apiKey: state.replaceKey ? state.apiKey : undefined,
+        primaryModel: state.primaryModel,
+        secondaryModel: state.secondaryModel
+      })
     });
     const data = await response.json();
-    setBusy(null);
+    setBusy("");
     if (!response.ok) {
       setMessage(data.message);
       return;
     }
-
-    setModels(data.models || []);
-    setForm((current) => ({
+    const updater = contour === "analysis" ? setAnalysis : setWriter;
+    updater((current) => ({
       ...current,
-      aiBaseUrl: data.baseUrl || current.aiBaseUrl,
-      aiPrimaryModel: data.recommended?.primary || current.aiPrimaryModel,
-      aiFastModel: data.recommended?.fast || current.aiFastModel
+      models: data.models || [],
+      primaryModel: data.recommended?.primary || current.primaryModel,
+      secondaryModel: data.recommended?.secondary || current.secondaryModel
     }));
-    setMessage(data.models?.length ? "Ключ проверен. Модели загружены." : "Ключ проверен. Используются рекомендованные модели.");
+    setMessage(`${contour === "analysis" ? "Аналитик" : "Писатель"}: ключ проверен.`);
   }
 
-  async function saveSettings() {
+  async function save() {
     setBusy("save");
     setMessage("");
     const response = await fetch("/api/settings/ai", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        ...form,
-        aiApiKey: replaceKey ? form.aiApiKey : undefined
+        analysisProvider: analysis.provider,
+        analysisBaseUrl: analysis.baseUrl,
+        analysisApiKey: analysis.replaceKey ? analysis.apiKey : undefined,
+        analysisModel: analysis.primaryModel,
+        fastModel: analysis.secondaryModel,
+        writerProvider: writer.provider,
+        writerBaseUrl: writer.baseUrl,
+        writerApiKey: writer.replaceKey ? writer.apiKey : undefined,
+        writerModel: writer.primaryModel,
+        reviewerModel: writer.secondaryModel
       })
     });
     const data = await response.json();
-    setBusy(null);
+    setBusy("");
     setMessage(data.message);
     if (response.ok) {
-      setHasSavedKey(Boolean(data.hasApiKey));
-      setKeyMask(data.apiKeyMask || "");
-      setReplaceKey(false);
-      setForm((current) => ({ ...current, aiApiKey: "" }));
-      onSaved?.({ ...form, aiApiKey: "" });
+      setAnalysis((current) => ({ ...current, apiKey: "", hasKey: true, keyMask: data.analysisKeyMask, replaceKey: false }));
+      setWriter((current) => ({ ...current, apiKey: "", hasKey: true, keyMask: data.writerKeyMask, replaceKey: false }));
+      onSaved?.();
     }
   }
 
-  const canTest = provider.enabled && (form.aiApiKey || hasSavedKey) && form.aiBaseUrl && form.aiPrimaryModel && form.aiFastModel;
-  const canSave = provider.enabled && (form.aiApiKey || hasSavedKey) && form.aiPrimaryModel && form.aiFastModel;
-
   return (
     <div className="grid gap-5">
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        {aiProviderPresets.map((item) => (
+      <Card>
+        <h2 className="text-xl font-semibold tracking-normal">Схема работы</h2>
+        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+          CareerOS использует два контура AI: аналитик разбирает вакансии и считает score, писатель готовит тексты, которые вы будете читать
+          и отправлять.
+        </p>
+      </Card>
+      <ContourPanel
+        title="Аналитик"
+        description="Используется для разбора вакансий, JSON-анализа, score, red flags и массовой обработки. Обычно сюда ставится более дешёвый провайдер."
+        contour="analysis"
+        allowedProviders={[deepseek, compatible]}
+        state={analysis}
+        setState={setAnalysis}
+        onProvider={selectProvider}
+        onTest={testContour}
+        busy={busy === "analysis"}
+        primaryLabel="Модель анализа"
+        secondaryLabel="Быстрая модель"
+      />
+      <ContourPanel
+        title="Писатель и проверяющий"
+        description="Используется для сопроводительных писем, follow-up сообщений, красивых объяснений и спорных решений."
+        contour="writer"
+        allowedProviders={[openai, compatible]}
+        state={writer}
+        setState={setWriter}
+        onProvider={selectProvider}
+        onTest={testContour}
+        busy={busy === "writer"}
+        primaryLabel="Модель письма"
+        secondaryLabel="Модель проверки спорных случаев"
+      />
+      <Button onClick={save} disabled={Boolean(busy) || !analysis.primaryModel || !writer.primaryModel}>
+        {busy === "save" ? "Сохраняем..." : "Сохранить настройки"}
+      </Button>
+      {message ? <p className="rounded-md border border-[var(--line)] bg-[var(--panel)] p-3 text-sm">{message}</p> : null}
+    </div>
+  );
+}
+
+function ContourPanel({
+  title,
+  description,
+  contour,
+  allowedProviders,
+  state,
+  setState,
+  onProvider,
+  onTest,
+  busy,
+  primaryLabel,
+  secondaryLabel
+}: {
+  title: string;
+  description: string;
+  contour: Contour;
+  allowedProviders: typeof providerPresets;
+  state: ContourState;
+  setState: (updater: (current: ContourState) => ContourState) => void;
+  onProvider: (contour: Contour, provider: string) => void;
+  onTest: (contour: Contour) => void;
+  busy: boolean;
+  primaryLabel: string;
+  secondaryLabel: string;
+}) {
+  return (
+    <Card className="grid gap-4">
+      <div>
+        <h2 className="text-xl font-semibold tracking-normal">{title}</h2>
+        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{description}</p>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        {allowedProviders.map((provider) => (
           <button
-            key={item.id}
+            key={provider.id}
             type="button"
-            onClick={() => selectProvider(item.id)}
-            className={`focus-ring rounded-lg border p-4 text-left transition ${
-              form.aiProvider === item.id ? "border-[var(--accent)] bg-[var(--soft)]" : "border-[var(--line)] bg-[var(--panel)]"
-            } ${!item.enabled ? "opacity-60" : ""}`}
+            onClick={() => onProvider(contour, provider.id)}
+            className={`focus-ring rounded-lg border p-4 text-left ${
+              state.provider === provider.id ? "border-[var(--accent)] bg-[var(--soft)]" : "border-[var(--line)]"
+            }`}
           >
-            <div className="font-semibold">{item.title}</div>
-            <p className="mt-2 text-sm leading-5 text-[var(--muted)]">{item.description}</p>
-            {!item.enabled ? <div className="mt-3 text-xs text-[var(--muted)]">Скоро</div> : null}
+            <div className="font-semibold">{provider.title}</div>
+            <p className="mt-2 text-sm leading-5 text-[var(--muted)]">{provider.description}</p>
           </button>
         ))}
       </div>
-
-      <Card className={`grid gap-4 ${compact ? "" : "max-w-3xl"}`}>
-        <div>
-          <h2 className="text-xl font-semibold tracking-normal">Проверка доступа</h2>
-          <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-            Для известных провайдеров CareerOS сам подставит адрес API и предложит модели. API-ключ хранится только локально.
-          </p>
-        </div>
-
-        {hasSavedKey && !replaceKey ? (
-          <div className="flex flex-wrap items-center gap-3 rounded-md border border-[var(--line)] bg-[var(--soft)] p-3 text-sm">
-            <span>Сохранённый ключ: {keyMask}</span>
-            <Button variant="secondary" onClick={() => setReplaceKey(true)}>
-              Заменить ключ
-            </Button>
-          </div>
-        ) : (
-          <Field label="API-ключ">
-            <input
-              className={inputClass}
-              type="password"
-              value={form.aiApiKey}
-              onChange={(event) => setForm({ ...form, aiApiKey: event.target.value })}
-              placeholder="Вставьте ключ провайдера"
-            />
-          </Field>
-        )}
-
-        {form.aiProvider === "compatible" ? (
-          <div className="grid gap-3">
-            <button type="button" className="w-fit text-sm text-[var(--accent)]" onClick={() => setShowAdvanced(!showAdvanced)}>
-              {showAdvanced ? "Скрыть расширенные настройки" : "Показать расширенные настройки"}
-            </button>
-            {showAdvanced ? (
-              <div className="grid gap-4 rounded-md border border-[var(--line)] p-4">
-                <Field label="Base URL">
-                  <input
-                    className={inputClass}
-                    value={form.aiBaseUrl}
-                    onChange={(event) => setForm({ ...form, aiBaseUrl: event.target.value })}
-                    placeholder="https://example.com/v1"
-                  />
-                </Field>
-                <Field label="Основная модель">
-                  <input className={inputClass} value={form.aiPrimaryModel} onChange={(event) => setForm({ ...form, aiPrimaryModel: event.target.value })} />
-                </Field>
-                <Field label="Быстрая модель">
-                  <input className={inputClass} value={form.aiFastModel} onChange={(event) => setForm({ ...form, aiFastModel: event.target.value })} />
-                </Field>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
-        <div className="flex flex-wrap gap-3">
-          <Button onClick={testKey} disabled={!canTest || Boolean(busy)}>
-            {busy === "test" ? "Проверяем..." : "Проверить ключ"}
-          </Button>
-          <Button variant="secondary" onClick={testKey} disabled={!canTest || Boolean(busy)}>
-            Проверить снова
+      {state.hasKey && !state.replaceKey ? (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-[var(--line)] bg-[var(--soft)] p-3 text-sm">
+          <span>Сохранённый ключ: {state.keyMask}</span>
+          <Button variant="secondary" onClick={() => setState((current) => ({ ...current, replaceKey: true }))}>
+            Заменить ключ
           </Button>
         </div>
+      ) : (
+        <Field label="API-ключ">
+          <input
+            className={inputClass}
+            type="password"
+            value={state.apiKey}
+            onChange={(event) => setState((current) => ({ ...current, apiKey: event.target.value }))}
+            placeholder="Вставьте ключ провайдера"
+          />
+        </Field>
+      )}
+      <button
+        type="button"
+        className="w-fit text-sm text-[var(--accent)]"
+        onClick={() => setState((current) => ({ ...current, showAdvanced: !current.showAdvanced }))}
+      >
+        {state.showAdvanced ? "Скрыть расширенные настройки" : "Показать расширенные настройки"}
+      </button>
+      {state.showAdvanced || state.provider === "compatible" ? (
+        <Field label="Base URL">
+          <input className={inputClass} value={state.baseUrl} onChange={(event) => setState((current) => ({ ...current, baseUrl: event.target.value }))} />
+        </Field>
+      ) : null}
+      <Button variant="secondary" onClick={() => onTest(contour)} disabled={busy || (!state.apiKey && !state.hasKey)}>
+        {busy ? "Проверяем..." : "Проверить"}
+      </Button>
+      <div className="grid gap-4 md:grid-cols-2">
+        <ModelField label={primaryLabel} value={state.primaryModel} models={state.models} onChange={(value) => setState((current) => ({ ...current, primaryModel: value }))} />
+        <ModelField label={secondaryLabel} value={state.secondaryModel} models={state.models} onChange={(value) => setState((current) => ({ ...current, secondaryModel: value }))} />
+      </div>
+    </Card>
+  );
+}
 
-        {models.length ? (
-          <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Основная модель">
-              <select className={inputClass} value={form.aiPrimaryModel} onChange={(event) => setForm({ ...form, aiPrimaryModel: event.target.value })}>
-                {models.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Быстрая модель">
-              <select className={inputClass} value={form.aiFastModel} onChange={(event) => setForm({ ...form, aiFastModel: event.target.value })}>
-                {models.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </div>
-        ) : form.aiProvider !== "compatible" ? (
-          <div className="grid gap-3 rounded-md border border-[var(--line)] p-4 text-sm">
-            <div>Основная модель: {form.aiPrimaryModel || "будет выбрана после проверки"}</div>
-            <div>Быстрая модель: {form.aiFastModel || "будет выбрана после проверки"}</div>
-          </div>
-        ) : null}
-
-        <Button onClick={saveSettings} disabled={!canSave || Boolean(busy)}>
-          {busy === "save" ? "Сохраняем..." : "Сохранить настройки"}
-        </Button>
-      </Card>
-
-      {message ? <p className="rounded-md border border-[var(--line)] bg-[var(--panel)] p-3 text-sm">{message}</p> : null}
-    </div>
+function ModelField({ label, value, models, onChange }: { label: string; value: string; models: string[]; onChange: (value: string) => void }) {
+  return (
+    <Field label={label}>
+      {models.length ? (
+        <select className={inputClass} value={value} onChange={(event) => onChange(event.target.value)}>
+          {models.map((model) => (
+            <option key={model} value={model}>
+              {model}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input className={inputClass} value={value} onChange={(event) => onChange(event.target.value)} />
+      )}
+    </Field>
   );
 }

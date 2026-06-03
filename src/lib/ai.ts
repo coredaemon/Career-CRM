@@ -1,25 +1,15 @@
 import { z } from "zod";
+import { callAiRouter } from "@/lib/ai-router";
+import { chooseModelForRole, providerPresets } from "@/lib/ai-presets";
 
-export type AiProviderId = "openai" | "deepseek" | "gemini" | "compatible";
-
-export type AiProviderPreset = {
-  id: AiProviderId;
-  title: string;
-  description: string;
-  baseUrl: string;
-  defaultPrimaryModel: string;
-  defaultFastModel: string;
-  enabled: boolean;
-};
-
-export const aiProviderPresets: AiProviderPreset[] = [
+export const aiProviderPresets = [
   {
     id: "openai",
     title: "OpenAI",
     description: "Официальный OpenAI API. Подходит для качественного анализа резюме, вакансий и сопроводительных писем.",
     baseUrl: "https://api.openai.com/v1",
-    defaultPrimaryModel: "gpt-4.1",
-    defaultFastModel: "gpt-4.1-mini",
+    defaultPrimaryModel: "gpt-5.4-mini",
+    defaultFastModel: "gpt-5.4-mini",
     enabled: true
   },
   {
@@ -27,8 +17,8 @@ export const aiProviderPresets: AiProviderPreset[] = [
     title: "DeepSeek",
     description: "Экономичный AI-провайдер с OpenAI-совместимым API.",
     baseUrl: "https://api.deepseek.com/v1",
-    defaultPrimaryModel: "deepseek-chat",
-    defaultFastModel: "deepseek-chat",
+    defaultPrimaryModel: "deepseek-v4-flash",
+    defaultFastModel: "deepseek-v4-flash",
     enabled: true
   },
   {
@@ -56,38 +46,9 @@ export function getAiProviderPreset(provider: string) {
 }
 
 export function chooseRecommendedModels(provider: string, models: string[]) {
-  const preset = getAiProviderPreset(provider);
-  const lower = models.map((model) => model.toLowerCase());
-
-  function findModel(candidates: string[]) {
-    for (const candidate of candidates) {
-      const exactIndex = lower.findIndex((model) => model === candidate.toLowerCase());
-      if (exactIndex >= 0) return models[exactIndex];
-    }
-    for (const candidate of candidates) {
-      const fuzzyIndex = lower.findIndex((model) => model.includes(candidate.toLowerCase()));
-      if (fuzzyIndex >= 0) return models[fuzzyIndex];
-    }
-    return "";
-  }
-
-  if (provider === "openai") {
-    return {
-      primary: findModel(["gpt-4.1", "gpt-4o", "gpt-5"]) || preset.defaultPrimaryModel,
-      fast: findModel(["gpt-4.1-mini", "gpt-4o-mini", "mini"]) || preset.defaultFastModel
-    };
-  }
-
-  if (provider === "deepseek") {
-    return {
-      primary: findModel(["deepseek-chat"]) || preset.defaultPrimaryModel,
-      fast: findModel(["deepseek-chat"]) || preset.defaultFastModel
-    };
-  }
-
   return {
-    primary: models[0] || preset.defaultPrimaryModel,
-    fast: models[1] || models[0] || preset.defaultFastModel
+    primary: chooseModelForRole(provider, provider === "deepseek" ? "analysis" : "writer", models),
+    fast: chooseModelForRole(provider, provider === "deepseek" ? "fast" : "reviewer", models)
   };
 }
 
@@ -117,6 +78,7 @@ export type ResumeAnalysis = z.infer<typeof resumeAnalysisSchema>;
 
 export const vacancyAnalysisSchema = z.object({
   vacancy_match_score: z.coerce.number().min(0).max(100),
+  confidence: z.enum(["low", "medium", "high"]).default("medium"),
   summary: z.string().default(""),
   why_matches: z.array(z.string()).default([]),
   weak_matches: z.array(z.string()).default([]),
@@ -127,22 +89,32 @@ export const vacancyAnalysisSchema = z.object({
   should_apply: z.enum(["yes", "maybe", "no"]).default("maybe"),
   reasoning_short: z.string().default(""),
   suggested_next_action: z.string().default(""),
-  cover_letter: z.string().default("")
+  questions_to_clarify: z.array(z.string()).default([]),
+  avoid_claims: z.array(z.string()).default([]),
+  cover_letter_brief: z
+    .object({
+      candidate_strengths: z.array(z.string()).default([]),
+      job_priorities: z.array(z.string()).default([]),
+      tone: z.string().default("деловой, короткий, человеческий")
+    })
+    .default({ candidate_strengths: [], job_priorities: [], tone: "деловой, короткий, человеческий" })
 });
 
 export type VacancyAnalysis = z.infer<typeof vacancyAnalysisSchema>;
 
+export const reviewerSchema = z.object({
+  should_adjust: z.boolean().default(false),
+  adjusted_should_apply: z.enum(["yes", "maybe", "no"]).default("maybe"),
+  adjusted_score: z.coerce.number().min(0).max(100).optional(),
+  missed_nuances: z.array(z.string()).default([]),
+  final_recommendation: z.string().default("")
+});
+
+export type ReviewerResult = z.infer<typeof reviewerSchema>;
+
 type ChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
-};
-
-type ChatRequest = {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  messages: ChatMessage[];
-  temperature?: number;
 };
 
 function apiUrl(baseUrl: string, path: string) {
@@ -152,26 +124,25 @@ function apiUrl(baseUrl: string, path: string) {
   return `${trimmed}/v1${path}`;
 }
 
-function completionsUrl(baseUrl: string) {
-  return apiUrl(baseUrl, "/chat/completions");
-}
-
-function modelsUrl(baseUrl: string) {
-  return apiUrl(baseUrl, "/models");
-}
-
-async function chatCompletion({ baseUrl, apiKey, model, messages, temperature = 0.2 }: ChatRequest) {
-  const response = await fetch(completionsUrl(baseUrl), {
+async function chatCompletion(params: {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  messages: ChatMessage[];
+  temperature?: number;
+  json?: boolean;
+}) {
+  const response = await fetch(apiUrl(params.baseUrl, "/chat/completions"), {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${params.apiKey}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model,
-      messages,
-      temperature,
-      response_format: { type: "json_object" }
+      model: params.model,
+      messages: params.messages,
+      temperature: params.temperature ?? 0.2,
+      response_format: params.json ? { type: "json_object" } : undefined
     })
   });
 
@@ -180,13 +151,11 @@ async function chatCompletion({ baseUrl, apiKey, model, messages, temperature = 
     throw new Error(text || `AI-провайдер вернул ошибку ${response.status}`);
   }
 
-  return response.json() as Promise<{
-    choices?: Array<{ message?: { content?: string } }>;
-  }>;
+  return response.json() as Promise<{ choices?: Array<{ message?: { content?: string } }> }>;
 }
 
 export async function fetchAiModels(params: { baseUrl: string; apiKey: string }) {
-  const response = await fetch(modelsUrl(params.baseUrl), {
+  const response = await fetch(apiUrl(params.baseUrl, "/models"), {
     headers: {
       Authorization: `Bearer ${params.apiKey}`,
       "Content-Type": "application/json"
@@ -194,53 +163,37 @@ export async function fetchAiModels(params: { baseUrl: string; apiKey: string })
   });
 
   if (!response.ok) return [];
-
   const data = (await response.json()) as { data?: Array<{ id?: string }> };
   return (data.data ?? []).map((item) => item.id).filter((id): id is string => Boolean(id)).sort();
 }
 
 export async function testAiConnection(input: z.infer<typeof aiSettingsSchema>) {
   const settings = aiSettingsSchema.parse(input);
-
-  if (!settings.aiApiKey) {
-    throw new Error("API-ключ нужен для проверки подключения.");
-  }
+  if (!settings.aiApiKey) throw new Error("API-ключ нужен для проверки подключения.");
 
   const result = await chatCompletion({
     baseUrl: settings.aiBaseUrl,
     apiKey: settings.aiApiKey,
     model: settings.aiFastModel || settings.aiPrimaryModel,
+    json: true,
     messages: [
-      {
-        role: "system",
-        content: "Верни только компактный JSON."
-      },
-      {
-        role: "user",
-        content: "Верни {\"ok\":true,\"message\":\"AI настроен\"}."
-      }
+      { role: "system", content: "Верни только компактный JSON." },
+      { role: "user", content: "Верни {\"ok\":true,\"message\":\"AI настроен\"}." }
     ],
     temperature: 0
   });
 
   const content = result.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error("AI-провайдер вернул пустой ответ.");
-  }
-
+  if (!content) throw new Error("AI-провайдер вернул пустой ответ.");
   return { ok: true, content };
 }
 
-export async function analyzeResumeWithAi(params: {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  resumeText: string;
-}) {
+export async function analyzeResumeWithAi(params: { baseUrl: string; apiKey: string; model: string; resumeText: string }) {
   const result = await chatCompletion({
     baseUrl: params.baseUrl,
     apiKey: params.apiKey,
     model: params.model,
+    json: true,
     messages: [
       {
         role: "system",
@@ -259,51 +212,24 @@ ${params.resumeText}`
   });
 
   const content = result.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error("AI-провайдер вернул пустой анализ резюме.");
-  }
-
+  if (!content) throw new Error("AI-провайдер вернул пустой анализ резюме.");
   return resumeAnalysisSchema.parse(JSON.parse(content));
 }
 
 export async function analyzeVacancyWithAi(params: {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
   resumeText: string;
-  searchProfile: {
-    title?: string;
-    summary?: string;
-    targetRoles?: string[];
-    searchQueries?: string[];
-    positiveSignals?: string[];
-    negativeSignals?: string[];
-    stopWords?: string[];
-  } | null;
-  vacancy: {
-    title: string;
-    companyName?: string;
-    source?: string;
-    sourceUrl?: string;
-    salaryText?: string;
-    location?: string;
-    workFormat?: string;
-    rawDescription?: string;
-  };
+  searchProfile: Record<string, unknown> | null;
+  vacancy: Record<string, unknown>;
 }) {
-  const result = await chatCompletion({
-    baseUrl: params.baseUrl,
-    apiKey: params.apiKey,
-    model: params.model,
-    messages: [
-      {
-        role: "system",
-        content:
-          "Ты анализируешь вакансию для локальной Career CRM. Отвечай строго JSON на русском языке. Не придумывай опыт кандидата. Используй только факты из резюме. Если требование вакансии не подтверждено резюме, добавь его в missing_requirements. Если вакансия мутная, прямо укажи red_flags. Сопроводительное письмо короткое, деловое, человеческое, без канцелярита и без неподтверждённых фактов. Адаптируй акценты: руководящая роль — управление, самостоятельность, процессы; аналитическая роль — анализ, структурирование, работа с информацией; судебная роль — процессуальные документы, споры, претензионная работа; договорная роль — договоры, риски, контрагенты."
-      },
-      {
-        role: "user",
-        content: `Верни JSON с ключами vacancy_match_score, summary, why_matches, weak_matches, red_flags, missing_requirements, recommended_resume_angle, recommended_cover_letter_focus, should_apply, reasoning_short, suggested_next_action, cover_letter.
+  const baseMessages: ChatMessage[] = [
+    {
+      role: "system",
+      content:
+        "Ты аналитический JSON-обработчик для CareerOS. Верни только валидный JSON на русском языке. Не придумывай опыт кандидата. Используй только факты из резюме и вакансии. Если требование не подтверждено резюме, добавь его в missing_requirements. Если вакансия мутная, прямо укажи red_flags. Не пиши сопроводительное письмо."
+    },
+    {
+      role: "user",
+      content: `Верни JSON с ключами vacancy_match_score, confidence, summary, why_matches, weak_matches, red_flags, missing_requirements, recommended_resume_angle, recommended_cover_letter_focus, should_apply, reasoning_short, suggested_next_action, questions_to_clarify, avoid_claims, cover_letter_brief.
 
 Резюме:
 ${params.resumeText}
@@ -313,60 +239,108 @@ ${JSON.stringify(params.searchProfile ?? {}, null, 2)}
 
 Вакансия:
 ${JSON.stringify(params.vacancy, null, 2)}`
-      }
-    ],
-    temperature: 0.15
-  });
+    }
+  ];
 
-  const content = result.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error("AI-провайдер вернул пустой анализ вакансии.");
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = await callAiRouter({
+      role: "analysis",
+      taskType: "vacancy_analysis",
+      messages:
+        attempt === 0
+          ? baseMessages
+          : [...baseMessages, { role: "user", content: "Предыдущий ответ был невалидным JSON. Верни только JSON без markdown." }],
+      responseFormat: "json",
+      temperature: 0.15
+    });
+
+    try {
+      return {
+        analysis: vacancyAnalysisSchema.parse(JSON.parse(result.content)),
+        meta: { provider: result.provider, model: result.model, role: result.role }
+      };
+    } catch {
+      if (attempt === 1) throw new Error("AI вернул невалидный JSON анализа вакансии. Попробуйте ещё раз или выберите другую модель аналитика.");
+    }
   }
 
-  return vacancyAnalysisSchema.parse(JSON.parse(content));
+  throw new Error("Не удалось получить анализ вакансии.");
 }
 
-export async function regenerateCoverLetterWithAi(params: {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  resumeText: string;
-  vacancy: {
-    title: string;
-    companyName?: string | null;
-    rawDescription?: string | null;
-    aiAnalysisJson?: string | null;
-  };
-  instruction: string;
-}) {
-  const result = await chatCompletion({
-    baseUrl: params.baseUrl,
-    apiKey: params.apiKey,
-    model: params.model,
+export async function reviewVacancyAnalysisWithAi(params: { analysis: VacancyAnalysis; vacancy: Record<string, unknown> }) {
+  const result = await callAiRouter({
+    role: "reviewer",
+    taskType: "vacancy_review",
+    responseFormat: "json",
+    temperature: 0.1,
     messages: [
-      {
-        role: "system",
-        content:
-          "Ты пишешь короткое сопроводительное письмо на русском языке. Не придумывай опыт, используй только факты из резюме и вакансии. Письмо должно быть деловым, живым и без канцелярита. Верни строгий JSON: {\"cover_letter\":\"...\"}."
-      },
+      { role: "system", content: "Ты проверяешь спорный AI-анализ вакансии. Верни только JSON. Не придумывай факты." },
       {
         role: "user",
-        content: `Инструкция по тону: ${params.instruction}
+        content: `Проверь анализ вакансии и верни JSON с ключами should_adjust, adjusted_should_apply, adjusted_score, missed_nuances, final_recommendation.
 
-Резюме:
-${params.resumeText}
+Анализ:
+${JSON.stringify(params.analysis, null, 2)}
 
 Вакансия:
 ${JSON.stringify(params.vacancy, null, 2)}`
       }
-    ],
-    temperature: 0.2
+    ]
   });
 
-  const content = result.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error("AI-провайдер вернул пустое письмо.");
-  }
-
-  return z.object({ cover_letter: z.string().min(1) }).parse(JSON.parse(content)).cover_letter;
+  return {
+    review: reviewerSchema.parse(JSON.parse(result.content)),
+    meta: { provider: result.provider, model: result.model, role: result.role }
+  };
 }
+
+export async function generateCoverLetterWithAi(params: {
+  resumeText: string;
+  vacancy: { title: string; companyName?: string | null; rawDescription?: string | null; aiAnalysisJson?: string | null };
+  analysis: VacancyAnalysis;
+  instruction?: string;
+}) {
+  const brief = {
+    vacancy_title: params.vacancy.title,
+    company: params.vacancy.companyName,
+    candidate_strengths: params.analysis.cover_letter_brief.candidate_strengths,
+    job_priorities: params.analysis.cover_letter_brief.job_priorities,
+    red_flags: params.analysis.red_flags,
+    avoid_claims: params.analysis.avoid_claims,
+    recommended_cover_letter_focus: params.analysis.recommended_cover_letter_focus,
+    tone: params.instruction || params.analysis.cover_letter_brief.tone
+  };
+
+  const result = await callAiRouter({
+    role: "writer",
+    taskType: "cover_letter",
+    responseFormat: "json",
+    temperature: 0.25,
+    messages: [
+      {
+        role: "system",
+        content:
+          "Ты пишешь короткое сопроводительное письмо на русском языке. Не придумывай опыт, используй только факты из выжимки и резюме. Письмо должно быть деловым, живым и пригодным для копирования работодателю. Верни строгий JSON: {\"cover_letter\":\"...\"}."
+      },
+      {
+        role: "user",
+        content: `Напиши сопроводительное письмо.
+
+Краткая выжимка:
+${JSON.stringify(brief, null, 2)}
+
+Минимальные факты из резюме:
+${params.resumeText}`
+      }
+    ]
+  });
+
+  return {
+    coverLetter: z.object({ cover_letter: z.string().min(1) }).parse(JSON.parse(result.content)).cover_letter,
+    meta: { provider: result.provider, model: result.model, role: result.role }
+  };
+}
+
+export const regenerateCoverLetterWithAi = generateCoverLetterWithAi;
+
+export { providerPresets };

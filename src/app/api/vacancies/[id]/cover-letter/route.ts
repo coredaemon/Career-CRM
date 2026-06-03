@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { regenerateCoverLetterWithAi } from "@/lib/ai";
+import { regenerateCoverLetterWithAi, vacancyAnalysisSchema } from "@/lib/ai";
 import { prisma } from "@/lib/prisma";
 import { getUserSettings } from "@/lib/settings";
 
@@ -19,23 +19,22 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       prisma.resume.findUniqueOrThrow({ where: { id: body.resumeId } })
     ]);
 
-    const baseUrl = settings.aiBaseUrl || process.env.AI_BASE_URL || "";
-    const apiKey = settings.aiApiKey || process.env.AI_API_KEY || "";
-    const model = settings.aiPrimaryModel || process.env.AI_PRIMARY_MODEL || "";
-
-    if (!baseUrl || !apiKey || !model) {
-      return NextResponse.json(
-        { ok: false, message: "Сначала сохраните настройки AI: провайдер, API-ключ и модели." },
-        { status: 400 }
-      );
+    if (!settings.aiConfigured) {
+      return NextResponse.json({ ok: false, message: "Сначала сохраните настройки AI." }, { status: 400 });
     }
 
-    const text = await regenerateCoverLetterWithAi({
-      baseUrl,
-      apiKey,
-      model,
+    const analysis = vacancy.aiAnalysisJson
+      ? vacancyAnalysisSchema.parse(JSON.parse(vacancy.aiAnalysisJson))
+      : vacancyAnalysisSchema.parse({
+          vacancy_match_score: 50,
+          summary: "",
+          cover_letter_brief: { candidate_strengths: [], job_priorities: [], tone: body.instruction }
+        });
+
+    const result = await regenerateCoverLetterWithAi({
       resumeText: resume.originalText,
       instruction: body.instruction,
+      analysis,
       vacancy: {
         title: vacancy.title,
         companyName: vacancy.company?.name,
@@ -48,7 +47,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       data: {
         vacancyId: vacancy.id,
         resumeId: resume.id,
-        text,
+        text: result.coverLetter,
         style: body.instruction
       }
     });

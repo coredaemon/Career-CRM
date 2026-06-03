@@ -32,6 +32,16 @@ model UserSettings {
   aiApiKey            String?
   aiPrimaryModel      String?
   aiFastModel         String?
+  analysisProvider    String?
+  analysisBaseUrl     String?
+  analysisApiKey      String?
+  analysisModel       String?
+  fastModel           String?
+  writerProvider      String?
+  writerBaseUrl       String?
+  writerApiKey        String?
+  writerModel         String?
+  reviewerModel       String?
   aiConfigured        Boolean  @default(false)
   onboardingCompleted Boolean  @default(false)
   createdAt           DateTime @default(now())
@@ -88,6 +98,7 @@ model Vacancy {
   matchReasonsJson        String?
   missingRequirementsJson String?
   recommendation          String?
+  aiMetaJson              String?
   nextActionType          String?
   nextActionAt            DateTime?
   nextActionNote          String?
@@ -103,6 +114,21 @@ model Vacancy {
   coverLetters            CoverLetter[]
   interactions            Interaction[]
   searchProfile           SearchProfile? @relation(fields: [searchProfileId], references: [id], onDelete: SetNull)
+}
+
+model AiCallLog {
+  id               String   @id @default(cuid())
+  taskType         String
+  provider         String
+  model            String
+  role             String
+  inputTokens      Int?
+  outputTokens     Int?
+  totalTokens      Int?
+  estimatedCostUsd Float?
+  status           String
+  errorMessage     String?
+  createdAt        DateTime @default(now())
 }
 
 model Company {

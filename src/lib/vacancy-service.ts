@@ -87,6 +87,7 @@ export async function createInteraction(params: {
 
 export function vacancyAnalysisStorage(analysis: {
   vacancy_match_score: number;
+  confidence?: string;
   summary: string;
   why_matches: string[];
   red_flags: string[];

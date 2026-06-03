@@ -42,7 +42,16 @@ test(".env.example contains only safe templates", async () => {
       "AI_BASE_URL=",
       "AI_API_KEY=",
       "AI_PRIMARY_MODEL=",
-      "AI_FAST_MODEL=",
+      "DEEPSEEK_API_KEY=",
+      "OPENAI_API_KEY=",
+      "AI_ANALYSIS_PROVIDER=deepseek",
+      "AI_ANALYSIS_BASE_URL=https://api.deepseek.com/v1",
+      "AI_ANALYSIS_MODEL=deepseek-v4-flash",
+      "AI_FAST_MODEL=deepseek-v4-flash",
+      "AI_WRITER_PROVIDER=openai",
+      "AI_WRITER_BASE_URL=https://api.openai.com/v1",
+      "AI_WRITER_MODEL=gpt-5.4-mini",
+      "AI_REVIEWER_MODEL=gpt-5.4-mini",
       'DATABASE_URL="file:./dev.db"'
     ].join("\n")
   );
